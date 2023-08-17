@@ -6,9 +6,7 @@ license = "MIT OR Apache-2.0"
 description = "Error reporting"
 
 [dependencies]
-ry_filesystem = { path = "../ry_filesystem" }
-ry_fx_hash = { path = "../ry_fx_hash" }
-ry_interner = { path = "../ry_interner" }
+tangic_common.workspace = true
 serde = { version = "1.0.183", optional = true, features = ["derive"] }
 termcolor = "1.2.0"
 unicode-width = "0.1.10"

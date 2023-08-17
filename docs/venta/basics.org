@@ -1,0 +1,22 @@
+#+title: Venta - The Tangi package manager :: Basics
+
+Venta is THE Tangi package manager.
+
+* Getting started
+So, at the root of your project, you will have a file called ~Venta.tn~.
+You may notice the file extension being ~.tn~. That is because ~Venta.tn~ is a build script.
+This build script, in particular, has superpowers.
+
+This is an example build script:
+#+begin_example tangi
+const package: venta.Package = .{
+    .name = "myapp",
+    .version = "0.0.1a",
+    // .root = "src/main.tn", // it is added by default, so no need to worry about that
+    // .kind = .app, // also added by default
+    // .kind = .lib, // if you want a library, set this to .lib
+};
+fn main(builder: &mut venta.Builder) {
+    let pkg = builder.package(package);
+}
+#+end_example

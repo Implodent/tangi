@@ -4,6 +4,7 @@ members = [
         # `tangic` binary
         "frontend/tangic",
         "frontend/parse",
+        "frontend/reporting",
         #! Common, i.e. the stuff that is needed in both frontend and backend
         "common",
         #! Backend, i.e. codegen
