@@ -1,0 +1,16 @@
+[workspace]
+members = [
+        #! Frontend, i.e. the userfacing stuff
+        # `tangic` binary
+        "frontend/tangic",
+        "frontend/parse",
+        #! Common, i.e. the stuff that is needed in both frontend and backend
+        "common/ast",
+        #! Backend, i.e. codegen
+        "backend/cg_llvm"
+]
+
+resolver = "2"
+
+[workspace.dependencies]
+tangic_ast.path = "common/ast"
