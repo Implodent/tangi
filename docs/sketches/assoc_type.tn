@@ -1,0 +1,9 @@
+trait Heh {
+      type HehAssociated
+}
+
+fn heh_accepter(const T: type, thing: T) void where @implements(T, Heh) {
+}
+
+fn accepts_trait(const H: trait, thing: &dyn H) void {
+}

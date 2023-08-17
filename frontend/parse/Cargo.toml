@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 logos = "0.13.0"
-tangic_ast.workspace = true
+tangic_common.workspace = true
+thiserror = "1.0.47"

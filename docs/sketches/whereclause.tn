@@ -1,0 +1,17 @@
+const Copy = import("std").marker.Copy;
+
+const fn satisfies_type(const T: type) bool {
+      @implements(T, Copy)
+}
+
+#[derive(Error)]
+struct DoesNotSatisfyError;
+
+fn where_clause(const T: type, thing: T) T where satisfies_type(T) {
+   thing
+}
+
+const fn no_where_clause(const T: type, thing: T) !T {
+   if satisfies_type(T) => thing
+   else => DoesNotSatisfyError
+}

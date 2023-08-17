@@ -5,7 +5,7 @@ members = [
         "frontend/tangic",
         "frontend/parse",
         #! Common, i.e. the stuff that is needed in both frontend and backend
-        "common/ast",
+        "common",
         #! Backend, i.e. codegen
         "backend/cg_llvm"
 ]
@@ -13,4 +13,4 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-tangic_ast.path = "common/ast"
+tangic_common.path = "common"

@@ -1,0 +1,7 @@
+#+author: nothendev
+#+date: 17/08/2023
+
+* Tangi Programming Language
+Tangi is a toy programming language designed to be a better Rust with some goodies from Zig.
+
+Some parts of ~common~ (notably ~fs~, ~fxhash~ and ~interner~) and ~reporting~ are +stolen+ taken and adapted from [[https://github.com/quantumatic/ry][ry]] with permission from the author.

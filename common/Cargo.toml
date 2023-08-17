@@ -1,0 +1,13 @@
+[package]
+name = "tangic_common"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+derive_more = "0.99.17"
+hashbrown = "0.14.0"
+lazy_static = "1.4.0"
+once_cell = { version = "1.18.0", features = ["parking_lot"] }
+parking_lot = "0.12.1"
