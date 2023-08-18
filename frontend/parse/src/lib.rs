@@ -1,11 +1,15 @@
 mod parsers;
 use std::{
+        borrow::Cow,
         fmt::{Debug, Display},
-        iter::{Cloned, Enumerate},
-        slice::Iter,
 };
 
-use logos::{Lexer, Logos, Span};
+use chumsky::{Parser, Stream};
+use logos::{Logos, Span, SpannedIter};
+
+pub fn fmt_debug<T: Debug>(t: T) -> String {
+        format!("{t:?}")
+}
 
 #[derive(Debug)]
 pub struct WithSpan<T>(pub T, pub Span);
@@ -25,6 +29,7 @@ impl<T: Clone> Clone for WithSpan<T> {
 }
 
 #[derive(Logos, Debug, Clone, PartialEq, Eq)]
+#[logos(skip r"[\n\r\t\w ]*")]
 pub enum Token {
         #[token("fn")]
         KeywordFn,
@@ -47,7 +52,65 @@ pub enum Token {
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
         #[error("invalid token, expected {expected}, actual: {actual:?}")]
-        InvalidToken { expected: String, actual: Token },
+        InvalidToken {
+                expected: Cow<'static, str>,
+                actual: Token,
+        },
         #[error("unexpected end of file")]
         UnexpectedEof,
+}
+
+pub fn parse<'H>(src: &'H str) -> Result<tangic_common::ast::File, Vec<WithSpan<ParseError>>> {
+        let eoi = src.len()..src.len() + 1;
+        parsers::help().parse(Stream::from_iter(
+                eoi,
+                Token::lexer(src)
+                        .spanned()
+                        .map(|result| (result.0.unwrap(), result.1)),
+        ))
+}
+
+#[derive(Debug)]
+pub struct Error {
+        pub labels: Vec<String>,
+        pub parsed: Vec<WithSpan<ParseError>>,
+}
+
+impl chumsky::Error<Token> for Error {
+        type Span = Span;
+        type Label = String;
+
+        fn expected_input_found<Iter: IntoIterator<Item = Option<Token>>>(
+                span: Self::Span,
+                expected: Iter,
+                found: Option<Token>,
+        ) -> Self {
+                Self {
+                        parsed: vec![WithSpan(
+                                match found {
+                                        Some(found) => ParseError::InvalidToken {
+                                                expected: expected
+                                                        .into_iter()
+                                                        .next()
+                                                        .map(fmt_debug)
+                                                        .map(Cow::Owned)
+                                                        .unwrap_or(Cow::Borrowed("end of file")),
+                                                actual: found,
+                                        },
+                                        None => ParseError::UnexpectedEof,
+                                },
+                                span,
+                        )],
+                        labels: vec![],
+                }
+        }
+        fn merge(mut self, other: Self) -> Self {
+                self.parsed.extend(other.parsed);
+                self.labels.extend(other.labels);
+                self
+        }
+        fn with_label(mut self, label: Self::Label) -> Self {
+                self.labels.push(label);
+                self
+        }
 }
