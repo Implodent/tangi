@@ -67,7 +67,7 @@ pub struct TypeDyn {
 #[derive(Debug, Clone)]
 pub struct TypeReference {
         // 'a
-        pub lifetime: Option<Ident>,
+        pub lifetime: Option<IdentifierID>,
         // mut
         pub mutable: bool,
         // T
@@ -94,5 +94,5 @@ pub enum Signedness {
         Unsigned = 0,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deref, DerefMut, Display)]
-pub struct Path(pub Vec<Ident>);
+#[derive(Debug, Clone, PartialEq, Eq, Deref, DerefMut)]
+pub struct Path(pub Vec<IdentifierID>);

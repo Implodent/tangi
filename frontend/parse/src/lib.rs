@@ -1,7 +1,11 @@
-use std::fmt::{Debug, Display};
+mod parsers;
+use std::{
+        fmt::{Debug, Display},
+        iter::{Cloned, Enumerate},
+        slice::Iter,
+};
 
 use logos::{Lexer, Logos, Span};
-use tangic_common::ast;
 
 #[derive(Debug)]
 pub struct WithSpan<T>(pub T, pub Span);
@@ -12,16 +16,15 @@ impl<T: Debug> Display for WithSpan<T> {
 }
 impl<T: Clone> Clone for WithSpan<T> {
         fn clone(&self) -> Self {
-                Self(self.0.clone(), *self.1)
+                Self(self.0.clone(), self.1.clone())
         }
         fn clone_from(&mut self, source: &Self) {
                 self.0 = source.0.clone();
                 self.1 = source.1;
         }
 }
-impl<T: Copy> Copy for WithSpan<T> {}
 
-#[derive(Logos, Debug)]
+#[derive(Logos, Debug, Clone, PartialEq, Eq)]
 pub enum Token {
         #[token("fn")]
         KeywordFn,
@@ -29,48 +32,22 @@ pub enum Token {
         KeywordConst,
         #[token("=")]
         PunctEq,
-}
-
-pub struct Parser<'h> {
-        iter: logos::Lexer<'h, Token>,
+        #[regex(r"[A-Za-z_][A-Za-z_0-9]*", |lex| lex.slice().to_owned())]
+        Ident(String),
+        #[token("(")]
+        OpenParen,
+        #[token(")")]
+        CloseParen,
+        #[token(":")]
+        Colon,
+        #[token(",")]
+        Comma,
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
-        InvalidToken {
-                expected: &'static str,
-                actual: Token,
-        },
+        #[error("invalid token, expected {expected}, actual: {actual:?}")]
+        InvalidToken { expected: String, actual: Token },
+        #[error("unexpected end of file")]
         UnexpectedEof,
-        Lexer(#[from] <Token as Logos>::Error),
-}
-
-type Result<T, E = ParseError> = core::result::Result<T, WithSpan<E>>;
-
-impl<'h> Parser<'h> {
-        pub fn new(src: &'h <Token as Logos>::Source) -> Self {
-                Self {
-                        iter: Token::lexer(src),
-                }
-        }
-
-        fn spanned<T>(&self, thing: T) -> WithSpan<T> {
-                WithSpan(thing, self.iter.span())
-        }
-
-        pub fn ask_file(&mut self) -> Result<ast::File> {
-                Err(self.spanned(ParseError::InvalidToken {
-                        expected: "h",
-                        actual: self.next_token()?,
-                }))
-        }
-
-        fn next_token(&mut self) -> Result<Token> {
-                self.iter
-                        .next()
-                        .ok_or_else(|| self.spanned(ParseError::UnexpectedEof))
-                        .and_then(|result| {
-                                Ok(result.map_err(ParseError::from).map_err(self.spanned))
-                        })
-        }
 }
