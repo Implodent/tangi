@@ -30,19 +30,23 @@ pub enum Type {
         Primitive(TypePrimitive),
         Reference(TypeReference),
         DynamicDispatch(TypeDyn),
+        Nullable(Box<Type>),
+        ErrorUnion(TypeErrorUnion),
 }
 
 impl Type {
         pub fn is_sized(&self) -> Option<bool> {
                 match self {
                         Self::Primitive(primitive) => match primitive {
-                                TypePrimitive::Array(TypeArray { amount: None, .. })
+                                TypePrimitive::Array(TypeArray {
+                                        size: ArraySize::Unknown,
+                                        ..
+                                })
                                 | TypePrimitive::Str => Some(false),
                                 TypePrimitive::Never => None,
                                 _ => Some(true),
                         },
                         Self::Reference(_) => Some(true),
-                        #[allow(unreachable_patterns)]
                         _ => None,
                 }
         }
@@ -55,6 +59,7 @@ pub enum TypePrimitive {
         Array(TypeArray),
         Str,
         Never,
+        Void,
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +82,20 @@ pub struct TypeReference {
 #[derive(Debug, Clone)]
 pub struct TypeArray {
         pub inner: Box<Type>,
-        pub amount: Option<usize>,
+        pub size: ArraySize,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeErrorUnion {
+        pub error_type: Box<Option<Type>>,
+        pub ok_type: Box<Type>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ArraySize {
+        Known(usize),
+        Unknown,
+        ConstUnknown,
 }
 
 /// Represents a number type, like u8 or i16

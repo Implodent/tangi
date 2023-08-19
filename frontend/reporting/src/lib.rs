@@ -1,398 +1,428 @@
-//! Defines everything needed for proper error reporting.
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
 
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/abs0luty/Ry/main/additional/icon/ry.png",
-    html_favicon_url = "https://raw.githubusercontent.com/abs0luty/Ry/main/additional/icon/ry.png"
-)]
-#![warn(missing_docs, clippy::dbg_macro)]
-#![warn(
-    // rustc lint groups https://doc.rust-lang.org/rustc/lints/groups.html
-    future_incompatible,
-    let_underscore,
-    nonstandard_style,
-    rust_2018_compatibility,
-    rust_2018_idioms,
-    rust_2021_compatibility,
-    unused,
-    // rustc allowed-by-default lints https://doc.rust-lang.org/rustc/lints/listing/allowed-by-default.html
-    macro_use_extern_crate,
-    meta_variable_misuse,
-    missing_abi,
-    missing_copy_implementations,
-    missing_debug_implementations,
-    non_ascii_idents,
-    noop_method_call,
-    single_use_lifetimes,
-    trivial_casts,
-    trivial_numeric_casts,
-    unreachable_pub,
-    unsafe_op_in_unsafe_fn,
-    unused_crate_dependencies,
-    unused_import_braces,
-    unused_lifetimes,
-    unused_qualifications,
-    unused_tuple_struct_fields,
-    variant_size_differences,
-    // rustdoc lints https://doc.rust-lang.org/rustdoc/lints.html
-    rustdoc::broken_intra_doc_links,
-    rustdoc::private_intra_doc_links,
-    rustdoc::missing_crate_level_docs,
-    rustdoc::private_doc_tests,
-    rustdoc::invalid_codeblock_attributes,
-    rustdoc::invalid_rust_codeblocks,
-    rustdoc::bare_urls,
-    // clippy categories https://doc.rust-lang.org/clippy/
-    clippy::all,
-    clippy::correctness,
-    clippy::suspicious,
-    clippy::style,
-    clippy::complexity,
-    clippy::perf,
-    clippy::pedantic,
-    clippy::nursery,
-)]
-#![allow(
-    clippy::module_name_repetitions,
-    clippy::too_many_lines,
-    clippy::option_if_let_else,
-    clippy::redundant_pub_crate,
-    clippy::too_many_arguments,
-    clippy::needless_pass_by_value,
-    clippy::similar_names
-)]
+mod source;
+mod display;
+mod draw;
+mod write;
 
-pub mod diagnostic;
-pub mod files;
-pub mod term;
-
-use core::fmt;
-use std::fmt::Display;
-
-use tangic_common::in_memory_file_storage::InMemoryFileStorage;
-use tangic_common::location::Location;
-use tangic_common::FxHashSet;
-use tangic_common::{PathID, PathInterner};
-
-use crate::diagnostic::Label;
-use crate::{
-    diagnostic::{Diagnostic, Severity},
-    files::Files,
-    term::{
-        termcolor::{ColorChoice, StandardStream},
-        Config,
-    },
+pub use crate::{
+    source::{Line, Source, Cache, FileCache, FnCache, sources},
+    draw::{Fmt, ColorGenerator},
 };
+pub use yansi::Color;
 
-/// Stores basic information for reporting diagnostics.
-#[derive(Debug)]
-pub struct DiagnosticsEmitter<'p> {
-    /// The stream in which diagnostics is reported into.
-    writer: StandardStream,
+#[cfg(any(feature = "concolor", doc))]
+pub use crate::draw::StdoutFmt;
 
-    /// The config for diagnostics reporting.
-    config: Config,
+use crate::display::*;
+use std::{
+    ops::Range,
+    io::{self, Write},
+    hash::Hash,
+    cmp::{PartialEq, Eq},
+    fmt,
+};
+use unicode_width::UnicodeWidthChar;
 
-    /// The files that are involved in the diagnostics are temporarily stored here.
-    file_storage: InMemoryFileStorage<'p>,
+/// A trait implemented by spans within a character-based source.
+pub trait Span {
+    /// The identifier used to uniquely refer to a source. In most cases, this is the fully-qualified path of the file.
+    type SourceId: PartialEq + ToOwned + ?Sized;
+
+    /// Get the identifier of the source that this span refers to.
+    fn source(&self) -> &Self::SourceId;
+
+    /// Get the start offset of this span.
+    ///
+    /// Offsets are zero-indexed character offsets from the beginning of the source.
+    fn start(&self) -> usize;
+
+    /// Get the (exclusive) end offset of this span.
+    ///
+    /// The end offset should *always* be greater than or equal to the start offset as given by [`Span::start`].
+    ///
+    /// Offsets are zero-indexed character offsets from the beginning of the source.
+    fn end(&self) -> usize;
+
+    /// Get the length of this span (difference between the start of the span and the end of the span).
+    fn len(&self) -> usize { self.end().saturating_sub(self.start()) }
+
+    /// Determine whether the span contains the given offset.
+    fn contains(&self, offset: usize) -> bool { (self.start()..self.end()).contains(&offset) }
 }
 
-/// Multi file diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MultiFileDiagnostic {
-    /// ID-s of the paths of the files that the diagnostics belongs to.
-    pub path_ids: Vec<PathID>,
+impl Span for Range<usize> {
+    type SourceId = ();
 
-    /// Diagnostic.
-    pub diagnostic: Diagnostic<PathID>,
+    fn source(&self) -> &Self::SourceId { &() }
+    fn start(&self) -> usize { self.start }
+    fn end(&self) -> usize { self.end }
 }
 
-/// Global diagnostics.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Diagnostics {
-    /// Files that are involved in the diagnostics.
-    pub files_involved: FxHashSet<PathID>,
+impl<Id: fmt::Debug + Hash + PartialEq + Eq + ToOwned> Span for (Id, Range<usize>) {
+    type SourceId = Id;
 
-    /// Diagnostics associated with files.
-    pub file_diagnostics: Vec<Diagnostic<PathID>>,
-
-    /// Context free diagnostics.
-    pub context_free_diagnostics: Vec<Diagnostic<()>>,
+    fn source(&self) -> &Self::SourceId { &self.0 }
+    fn start(&self) -> usize { self.1.start }
+    fn end(&self) -> usize { self.1.end }
 }
 
-impl Default for Diagnostics {
-    fn default() -> Self {
-        Self::new()
-    }
+/// A type that represents a labelled section of source code.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Label<S = Range<usize>> {
+    span: S,
+    msg: Option<String>,
+    color: Option<Color>,
+    order: i32,
+    priority: i32,
 }
 
-impl Diagnostics {
-    /// Creates a new instance of [`Diagnostics`].
-    #[inline]
-    #[must_use]
-    pub fn new() -> Self {
+impl<S> Label<S> {
+    /// Create a new [`Label`].
+    pub fn new(span: S) -> Self {
         Self {
-            files_involved: FxHashSet::default(),
-            file_diagnostics: vec![],
-            context_free_diagnostics: Vec::new(),
+            span,
+            msg: None,
+            color: None,
+            order: 0,
+            priority: 0,
         }
     }
 
-    /// Adds a diagnostic associated with a single file.
-    #[inline]
-    pub fn add_single_file_diagnostic(
-        &mut self,
-        file_path_id: PathID,
-        diagnostic: Diagnostic<PathID>,
-    ) {
-        self.files_involved.insert(file_path_id);
-        self.file_diagnostics.push(diagnostic);
-    }
-
-    /// Adds diagnostics associated with a single file.
-    #[inline]
-    pub fn add_single_file_diagnostics(
-        &mut self,
-        file_path_id: PathID,
-        diagnostic: impl IntoIterator<Item = Diagnostic<PathID>>,
-    ) {
-        self.files_involved.insert(file_path_id);
-        self.file_diagnostics.extend(diagnostic);
-    }
-
-    /// Adds a diagnostic associated with some files.
-    #[inline]
-    pub fn add_file_diagnostic(
-        &mut self,
-        files_involved: impl IntoIterator<Item = PathID>,
-        diagnostic: Diagnostic<PathID>,
-    ) {
-        self.files_involved.extend(files_involved);
-        self.file_diagnostics.push(diagnostic);
-    }
-
-    /// Adds diagnostics associated with some files.
-    #[inline]
-    pub fn add_file_diagnostics(
-        &mut self,
-        files_involved: impl IntoIterator<Item = PathID>,
-        diagnostics: impl IntoIterator<Item = Diagnostic<PathID>>,
-    ) {
-        self.files_involved.extend(files_involved);
-        self.file_diagnostics.extend(diagnostics);
-    }
-
-    /// Returns `true` if diagnostics are fatal.
-    #[inline]
-    #[must_use]
-    pub fn is_fatal(&self) -> bool {
-        !self.is_ok()
-    }
-
-    /// Returns `true` if diagnostics are ok.
-    #[inline]
-    #[must_use]
-    pub fn is_ok(&self) -> bool {
-        self.context_free_diagnostics
-            .iter()
-            .all(|d| !is_fatal_sevirity(d.severity))
-            && self
-                .file_diagnostics
-                .iter()
-                .all(|d| !is_fatal_sevirity(d.severity))
-    }
-}
-
-/// Empty diagnostics manager (implements [`Files`]).
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Hash)]
-pub struct EmptyDiagnosticsManager;
-
-/// Empty source file name (used for internal usage,
-/// see [`EmptyDiagnosticsManager`] for more details).
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Hash)]
-pub struct EmptyName;
-
-/// Empty source file source (used for internal usage,
-/// see [`EmptyDiagnosticsManager`] for more details).
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Hash)]
-pub struct EmptySource;
-
-impl Display for EmptyName {
-    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Ok(())
-    }
-}
-
-impl AsRef<str> for EmptySource {
-    fn as_ref(&self) -> &str {
-        ""
-    }
-}
-
-impl Files<'_> for EmptyDiagnosticsManager {
-    type FileId = ();
-    type Name = EmptyName;
-    type Source = EmptySource;
-
-    fn name(&self, _: ()) -> Result<Self::Name, files::Error> {
-        Ok(EmptyName)
-    }
-
-    fn source(&'_ self, _: ()) -> Result<Self::Source, files::Error> {
-        Ok(EmptySource)
-    }
-
-    fn line_index(&'_ self, _: (), _: usize) -> Result<usize, files::Error> {
-        panic!("line_index() is not implemented for EmptyDiagnosticsManager")
-    }
-
-    fn line_range(&'_ self, _: (), _: usize) -> Result<std::ops::Range<usize>, files::Error> {
-        panic!("line_range() is not implemented for EmptyDiagnosticsManager")
-    }
-}
-
-impl<'p> DiagnosticsEmitter<'p> {
-    /// Create a new [`DiagnosticsEmitter`] instance.
-    #[inline]
-    #[must_use]
-    pub fn new(path_interner: &'p PathInterner) -> Self {
-        Self {
-            writer: StandardStream::stderr(ColorChoice::Always),
-            config: Config::default(),
-            file_storage: InMemoryFileStorage::new(path_interner),
-        }
-    }
-
-    /// Set the stream in which diagnostics is reported into.
-    #[inline]
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)] // false-positive clippy lint
-    pub fn with_diagnostics_writer(mut self, writer: StandardStream) -> Self {
-        self.writer = writer;
+    /// Give this label a message.
+    pub fn with_message<M: ToString>(mut self, msg: M) -> Self {
+        self.msg = Some(msg.to_string());
         self
     }
 
-    /// Set the config for diagnostics reporting.
-    #[inline]
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)] // false-positive clippy lint
-    pub fn with_diagnostics_config(mut self, config: Config) -> Self {
+    /// Give this label a highlight colour.
+    pub fn with_color(mut self, color: Color) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// Specify the order of this label relative to other labels.
+    ///
+    /// Lower values correspond to this label having an earlier order.
+    ///
+    /// If unspecified, labels default to an order of `0`.
+    ///
+    /// When labels are displayed after a line the crate needs to decide which labels should be displayed first. By
+    /// Default, the orders labels based on where their associated line meets the text (see [`LabelAttach`]).
+    /// Additionally, multi-line labels are ordered before inline labels. You can use this function to override this
+    /// behaviour.
+    pub fn with_order(mut self, order: i32) -> Self {
+        self.order = order;
+        self
+    }
+
+    /// Specify the priority of this label relative to other labels.
+    ///
+    /// Higher values correspond to this label having a higher priority.
+    ///
+    /// If unspecified, labels default to a priority of `0`.
+    ///
+    /// Label spans can overlap. When this happens, the crate needs to decide which labels to prioritise for various
+    /// purposes such as highlighting. By default, spans with a smaller length get a higher priority. You can use this
+    /// function to override this behaviour.
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = priority;
+        self
+    }
+}
+
+/// A type representing a diagnostic that is ready to be written to output.
+pub struct Report<'a, S: Span = Range<usize>> {
+    kind: ReportKind<'a>,
+    code: Option<String>,
+    msg: Option<String>,
+    note: Option<String>,
+    help: Option<String>,
+    location: (<S::SourceId as ToOwned>::Owned, usize),
+    labels: Vec<Label<S>>,
+    config: Config,
+}
+
+impl<S: Span> Report<'_, S> {
+    /// Begin building a new [`Report`].
+    pub fn build<Id: Into<<S::SourceId as ToOwned>::Owned>>(kind: ReportKind, src_id: Id, offset: usize) -> ReportBuilder<S> {
+        ReportBuilder {
+            kind,
+            code: None,
+            msg: None,
+            note: None,
+            help: None,
+            location: (src_id.into(), offset),
+            labels: Vec::new(),
+            config: Config::default(),
+        }
+    }
+
+    /// Write this diagnostic out to `stderr`.
+    pub fn eprint<C: Cache<S::SourceId>>(&self, cache: C) -> io::Result<()> {
+        self.write(cache, io::stderr())
+    }
+
+    /// Write this diagnostic out to `stdout`.
+    ///
+    /// In most cases, [`Report::eprint`] is the
+    /// ['more correct'](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)) function to use.
+    pub fn print<C: Cache<S::SourceId>>(&self, cache: C) -> io::Result<()> {
+        self.write_for_stdout(cache, io::stdout())
+    }
+}
+
+impl<'a, S: Span> fmt::Debug for Report<'a, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Report")
+            .field("kind", &self.kind)
+            .field("code", &self.code)
+            .field("msg", &self.msg)
+            .field("note", &self.note)
+            .field("help", &self.help)
+            .field("config", &self.config)
+            .finish()
+    }
+}
+/// A type that defines the kind of report being produced.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ReportKind<'a> {
+    /// The report is an error and indicates a critical problem that prevents the program performing the requested
+    /// action.
+    Error,
+    /// The report is a warning and indicates a likely problem, but not to the extent that the requested action cannot
+    /// be performed.
+    Warning,
+    /// The report is advice to the user about a potential anti-pattern of other benign issues.
+    Advice,
+    /// The report is of a kind not built into Ariadne.
+    Custom(&'a str, Color),
+}
+
+impl fmt::Display for ReportKind<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ReportKind::Error => write!(f, "Error"),
+            ReportKind::Warning => write!(f, "Warning"),
+            ReportKind::Advice => write!(f, "Advice"),
+            ReportKind::Custom(s, _) => write!(f, "{}", s),
+        }
+    }
+}
+
+/// A type used to build a [`Report`].
+pub struct ReportBuilder<'a, S: Span> {
+    kind: ReportKind<'a>,
+    code: Option<String>,
+    msg: Option<String>,
+    note: Option<String>,
+    help: Option<String>,
+    location: (<S::SourceId as ToOwned>::Owned, usize),
+    labels: Vec<Label<S>>,
+    config: Config,
+}
+
+impl<'a, S: Span> ReportBuilder<'a, S> {
+    /// Give this report a numerical code that may be used to more precisely look up the error in documentation.
+    pub fn with_code<C: fmt::Display>(mut self, code: C) -> Self {
+        self.code = Some(format!("{:02}", code));
+        self
+    }
+
+    /// Set the message of this report.
+    pub fn set_message<M: ToString>(&mut self, msg: M) {
+        self.msg = Some(msg.to_string());
+    }
+
+    /// Add a message to this report.
+    pub fn with_message<M: ToString>(mut self, msg: M) -> Self {
+        self.msg = Some(msg.to_string());
+        self
+    }
+
+    /// Set the note of this report.
+    pub fn set_note<N: ToString>(&mut self, note: N) {
+        self.note = Some(note.to_string());
+    }
+
+    /// Set the note of this report.
+    pub fn with_note<N: ToString>(mut self, note: N) -> Self {
+        self.set_note(note);
+        self
+    }
+
+    /// Set the help message of this report.
+    pub fn set_help<N: ToString>(&mut self, note: N) {
+        self.help = Some(note.to_string());
+    }
+
+    /// Set the help message of this report.
+    pub fn with_help<N: ToString>(mut self, note: N) -> Self {
+        self.set_help(note);
+        self
+    }
+
+    /// Add a label to the report.
+    pub fn add_label(&mut self, label: Label<S>) {
+        self.add_labels(std::iter::once(label));
+    }
+
+    /// Add multiple labels to the report.
+    pub fn add_labels<L: IntoIterator<Item = Label<S>>>(&mut self, labels: L) {
+        let config = &self.config; // This would not be necessary in Rust 2021 edition
+        self.labels.extend(labels.into_iter().map(|mut label| { label.color = config.filter_color(label.color); label }));
+    }
+
+    /// Add a label to the report.
+    pub fn with_label(mut self, label: Label<S>) -> Self {
+        self.add_label(label);
+        self
+    }
+
+    /// Add multiple labels to the report.
+    pub fn with_labels<L: IntoIterator<Item = Label<S>>>(mut self, labels: L) -> Self {
+        self.add_labels(labels);
+        self
+    }
+
+    /// Use the given [`Config`] to determine diagnostic attributes.
+    pub fn with_config(mut self, config: Config) -> Self {
         self.config = config;
         self
     }
 
-    /// Emit the diagnostic not associated with a file.
-    #[inline]
-    #[allow(clippy::missing_panics_doc)]
-    pub fn emit_context_free_diagnostic(&self, diagnostic: &Diagnostic<()>) {
-        term::emit(
-            &mut self.writer.lock(),
-            &self.config,
-            &EmptyDiagnosticsManager,
-            diagnostic,
-        )
-        .unwrap();
-    }
-
-    /// Emit diagnostics not associated with a particular file.
-    #[inline]
-    pub fn emit_context_free_diagnostics(&self, diagnostics: &[Diagnostic<()>]) {
-        for diagnostic in diagnostics {
-            self.emit_context_free_diagnostic(diagnostic);
+    /// Finish building the [`Report`].
+    pub fn finish(self) -> Report<'a, S> {
+        Report {
+            kind: self.kind,
+            code: self.code,
+            msg: self.msg,
+            note: self.note,
+            help: self.help,
+            location: self.location,
+            labels: self.labels,
+            config: self.config,
         }
     }
+}
 
-    /// Emit diagnostics associated with a particular file. If the file
-    /// cannot be read, stops executing (no panic, diagnostic is just ignored).
+impl<'a, S: Span> fmt::Debug for ReportBuilder<'a, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReportBuilder")
+            .field("kind", &self.kind)
+            .field("code", &self.code)
+            .field("msg", &self.msg)
+            .field("note", &self.note)
+            .field("help", &self.help)
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
+/// The attachment point of inline label arrows
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LabelAttach {
+    /// Arrows should attach to the start of the label span.
+    Start,
+    /// Arrows should attach to the middle of the label span (or as close to the middle as we can get).
+    Middle,
+    /// Arrows should attach to the end of the label span.
+    End,
+}
+
+/// Possible character sets to use when rendering diagnostics.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CharSet {
+    /// Unicode characters (an attempt is made to use only commonly-supported characters).
+    Unicode,
+    /// ASCII-only characters.
+    Ascii,
+}
+
+/// A type used to configure a report
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Config {
+    cross_gap: bool,
+    label_attach: LabelAttach,
+    compact: bool,
+    underlines: bool,
+    multiline_arrows: bool,
+    color: bool,
+    tab_width: usize,
+    char_set: CharSet,
+}
+
+impl Config {
+    /// When label lines cross one-another, should there be a gap?
     ///
-    /// # Panics
-    /// * If the file with a given path does not exist.
-    /// * If the file path id cannot be resolved in the path storage.
-    #[inline]
-    pub fn emit_file_diagnostic(&self, diagnostic: &Diagnostic<PathID>) {
-        term::emit(
-            &mut self.writer.lock(),
-            &self.config,
-            &self.file_storage,
-            diagnostic,
-        )
-        .unwrap();
-    }
+    /// The alternative to this is to insert crossing characters. However, these interact poorly with label colours.
+    ///
+    /// If unspecified, this defaults to [`false`].
+    pub fn with_cross_gap(mut self, cross_gap: bool) -> Self { self.cross_gap = cross_gap; self }
+    /// Where should inline labels attach to their spans?
+    ///
+    /// If unspecified, this defaults to [`LabelAttach::Middle`].
+    pub fn with_label_attach(mut self, label_attach: LabelAttach) -> Self { self.label_attach = label_attach; self }
+    /// Should the report remove gaps to minimise used space?
+    ///
+    /// If unspecified, this defaults to [`false`].
+    pub fn with_compact(mut self, compact: bool) -> Self { self.compact = compact; self }
+    /// Should underlines be used for label span where possible?
+    ///
+    /// If unspecified, this defaults to [`true`].
+    pub fn with_underlines(mut self, underlines: bool) -> Self { self.underlines = underlines; self }
+    /// Should arrows be used to point to the bounds of multi-line spans?
+    ///
+    /// If unspecified, this defaults to [`true`].
+    pub fn with_multiline_arrows(mut self, multiline_arrows: bool) -> Self { self.multiline_arrows = multiline_arrows; self }
+    /// Should colored output should be enabled?
+    ///
+    /// If unspecified, this defaults to [`true`].
+    pub fn with_color(mut self, color: bool) -> Self { self.color = color; self }
+    /// How many characters width should tab characters be?
+    ///
+    /// If unspecified, this defaults to `4`.
+    pub fn with_tab_width(mut self, tab_width: usize) -> Self { self.tab_width = tab_width; self }
+    /// What character set should be used to display dynamic elements such as boxes and arrows?
+    ///
+    /// If unspecified, this defaults to [`CharSet::Unicode`].
+    pub fn with_char_set(mut self, char_set: CharSet) -> Self { self.char_set = char_set; self }
 
-    /// Emit all of the single file diagnostics.
-    #[allow(single_use_lifetimes)] // anonymous lifetimes in traits are unstable
-    pub fn emit_file_diagnostics<'a>(
-        &self,
-        diagnostics: impl IntoIterator<Item = &'a Diagnostic<PathID>>,
-    ) {
-        for diagnostic in diagnostics {
-            self.emit_file_diagnostic(diagnostic);
+    fn error_color(&self) -> Option<Color> { Some(Color::Red).filter(|_| self.color) }
+    fn warning_color(&self) -> Option<Color> { Some(Color::Yellow).filter(|_| self.color) }
+    fn advice_color(&self) -> Option<Color> { Some(Color::Fixed(147)).filter(|_| self.color) }
+    fn margin_color(&self) -> Option<Color> { Some(Color::Fixed(246)).filter(|_| self.color) }
+    fn skipped_margin_color(&self) -> Option<Color> { Some(Color::Fixed(240)).filter(|_| self.color) }
+    fn unimportant_color(&self) -> Option<Color> { Some(Color::Fixed(249)).filter(|_| self.color) }
+    fn note_color(&self) -> Option<Color> { Some(Color::Fixed(115)).filter(|_| self.color) }
+    fn filter_color(&self, color: Option<Color>) -> Option<Color> { color.filter(|_| self.color) }
+
+    // Find the character that should be drawn and the number of times it should be drawn for each char
+    fn char_width(&self, c: char, col: usize) -> (char, usize) {
+        match c {
+            '\t' => {
+                // Find the column that the tab should end at
+                let tab_end = (col / self.tab_width + 1) * self.tab_width;
+                (' ',  tab_end - col)
+            },
+            c if c.is_whitespace() => (' ', 1),
+            _ => (c, c.width().unwrap_or(1)),
         }
     }
+}
 
-    /// Add files involved in the diagnostics into the file storage (if needed).
-    #[allow(single_use_lifetimes)] // anonymous lifetimes in traits are unstable
-    fn initialize_file_storage<'a>(
-        &mut self,
-        files_involved: impl IntoIterator<Item = &'a PathID>,
-    ) {
-        for file_path_id in files_involved {
-            self.file_storage.read_and_add_file_or_panic(*file_path_id);
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            cross_gap: true,
+            label_attach: LabelAttach::Middle,
+            compact: false,
+            underlines: true,
+            multiline_arrows: true,
+            color: true,
+            tab_width: 4,
+            char_set: CharSet::Unicode,
         }
-    }
-
-    /// Emit global diagnostics.
-    #[inline]
-    pub fn emit_global_diagnostics(&mut self, global_diagnostics: &Diagnostics) {
-        self.initialize_file_storage(&global_diagnostics.files_involved);
-        self.emit_context_free_diagnostics(&global_diagnostics.context_free_diagnostics);
-        self.emit_file_diagnostics(&global_diagnostics.file_diagnostics);
-    }
-}
-
-/// General status of diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagnosticsStatus {
-    /// There are no fatal diagnostics.
-    Ok,
-
-    /// There are fatal diagnostics.
-    Fatal,
-}
-
-/// Returns `true` if the given [`Severity`] is fatal.
-#[inline]
-#[must_use]
-pub const fn is_fatal_sevirity(severity: Severity) -> bool {
-    matches!(severity, Severity::Error | Severity::Bug)
-}
-
-/// Builds a diagnostic struct.
-pub trait BuildDiagnostic {
-    /// Convert [`self`] into [`Diagnostic`].
-    #[must_use]
-    fn build(&self) -> Diagnostic<PathID>;
-}
-
-/// Extends [`Location`] with methods for converting into primary and secondary
-/// diagnostics labels.
-pub trait LocationExt {
-    /// Gets primary diagnostics label in the location.
-    #[must_use]
-    fn to_primary_label(self) -> Label<PathID>;
-
-    /// Gets secondary diagnostics label in the location.
-    #[must_use]
-    fn to_secondary_label(self) -> Label<PathID>;
-}
-
-impl LocationExt for Location {
-    #[inline]
-    fn to_primary_label(self) -> Label<PathID> {
-        Label::primary(self.file_path_id, self)
-    }
-
-    #[inline]
-    fn to_secondary_label(self) -> Label<PathID> {
-        Label::secondary(self.file_path_id, self)
     }
 }

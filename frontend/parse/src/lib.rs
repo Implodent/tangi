@@ -30,12 +30,12 @@ impl<T: Clone> Clone for WithSpan<T> {
         }
         fn clone_from(&mut self, source: &Self) {
                 self.0 = source.0.clone();
-                self.1 = source.1;
+                self.1 = source.1.clone();
         }
 }
 
 #[derive(Logos, Debug, Clone, PartialEq, Eq)]
-#[logos(skip r"[\n\r\t\w ]*")]
+#[logos(skip r"[\n\r\t\f ]+")]
 pub enum Token {
         #[token("fn")]
         KeywordFn,
@@ -49,10 +49,24 @@ pub enum Token {
         OpenParen,
         #[token(")")]
         CloseParen,
+        #[token("[")]
+        OpenBracket,
+        #[token("]")]
+        CloseBracket,
+        #[token("{")]
+        OpenCurly,
+        #[token("}")]
+        CloseCurly,
         #[token(":")]
         Colon,
         #[token(",")]
         Comma,
+        #[regex(r"\d+", |lex| lex.slice().parse::<usize>().ok())]
+        Usize(usize),
+        #[token("?")]
+        Question,
+        #[token("!")]
+        Bang,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -60,7 +74,7 @@ pub enum ParseError {
         #[error("invalid token, expected {expected:?}, actual: {actual:?}")]
         InvalidToken {
                 expected: Vec<Cow<'static, str>>,
-                actual: Token,
+                actual: String,
         },
         #[error("unexpected end of file")]
         UnexpectedEof,
@@ -70,8 +84,11 @@ pub enum ParseError {
         Other(Cow<'static, str>),
 }
 
-pub fn parse<'H>(src: &'H str) -> Result<tangic_common::ast::File, Vec<Error>> {
+pub fn parse(src: &str) -> Result<tangic_common::ast::File, Vec<Error>> {
         let eoi = src.len()..src.len() + 1;
+        for (token, span) in Token::lexer(src).spanned() {
+                println!("{token:?} @ {}..{}", span.start, span.end);
+        }
         parsers::help().parse(Stream::from_iter(
                 eoi,
                 Token::lexer(src)
@@ -129,7 +146,7 @@ impl chumsky::Error<Token> for Error {
                                                                         ))
                                                         })
                                                         .collect(),
-                                                actual: found,
+                                                actual: fmt_debug(found),
                                         },
                                         None => ParseError::UnexpectedEof,
                                 },
@@ -168,7 +185,7 @@ impl chumsky::Error<char> for Error {
                                                                 .unwrap_or(Cow::Borrowed("EOF"))
                                                 })
                                                 .collect(),
-                                        actual: found,
+                                        actual: found.to_string(),
                                 },
                                 None => ParseError::UnexpectedEof,
                         },

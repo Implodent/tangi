@@ -42,9 +42,20 @@ macro_rules! impl_sym {
 }
 
 /// Represents unique symbol corresponding to some interned identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct IdentifierID(usize);
+
+impl ::core::fmt::Debug for IdentifierID {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+                write!(f, "IdentifierID({}, {})", self.0, self.value())
+        }
+}
+impl ::core::fmt::Debug for PathID {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+                write!(f, "PathID({}, {})", self.0, self.value().display())
+        }
+}
 
 impl_sym!(IdentifierInterner, IdentifierID, IDENT);
 
@@ -468,7 +479,7 @@ impl IdentifierInterner {
 pub struct PathInterner(Interner<PathID>);
 
 /// ID of a path in the [`PathInterner`].
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PathID(pub usize);
 impl_sym!(PathInterner, PathID, PATH);

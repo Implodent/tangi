@@ -1,15 +1,26 @@
 [package]
-name = "tangic_reporting"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-description = "Error reporting"
-
-[dependencies]
-tangic_common.workspace = true
-serde = { version = "1.0.183", optional = true, features = ["derive"] }
-termcolor = "1.2.0"
-unicode-width = "0.1.10"
+name = "tangic_reporting" # ariadne
+version = "0.3.0"
+description = "A fancy diagnostics & reporting crate"
+authors = ["Joshua Barretto <joshua.s.barretto@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/zesterer/ariadne"
+readme = "README.md"
+edition = "2018"
+keywords = ["error", "diagnostics", "report", "pretty", "compiler"]
+categories = ["command-line-utilities", "compilers", "filesystem", "visualization"]
+exclude = [
+	"/misc",
+	"/misc/*",
+]
 
 [features]
-serde = ["dep:serde"]
+auto-color = ["concolor", "concolor/auto"]
+
+[dependencies]
+yansi = "0.5"
+unicode-width = "0.1.9"
+concolor = { version = "0.1", optional = true }
+
+[dev-dependencies]
+insta = "1.31.0"
