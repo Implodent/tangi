@@ -67,6 +67,8 @@ pub enum Token {
         Question,
         #[token("!")]
         Bang,
+        #[token(";")]
+        Semi,
 }
 
 #[derive(thiserror::Error, Debug)]

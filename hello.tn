@@ -1,3 +1,1 @@
-fn hi(a: i32,) str![8i32]
-
-fn ho(b: str) ![?i12]?
+fn hi(a: i32) ![?i32]?i32

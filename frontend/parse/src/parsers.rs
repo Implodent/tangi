@@ -1,7 +1,7 @@
 use chumsky::{prelude::*, text::digits};
 use tangic_common::{
         ast::{
-                self, ArraySize, ItemFn, Signedness, Type, TypeArray, TypeErrorUnion, TypeNumber,
+                self, ItemFn, Signedness, Type, TypeArray, TypeErrorUnion, TypeNumber,
                 TypePrimitive,
         },
         interner::IdentifierID,
@@ -38,13 +38,7 @@ fn typ() -> impl Parser<Token, ast::Type, Error = Error> {
                         })
                 });
                 let array_type = just(Token::OpenBracket)
-                        .ignore_then(
-                                usize_token()
-                                        .map(ArraySize::Known)
-                                        .or(just(Token::Question).to(ArraySize::Unknown))
-                                        .or_not()
-                                        .map(|opt| opt.unwrap_or(ArraySize::ConstUnknown)),
-                        )
+                        .ignore_then(usize_token().or_not())
                         .then(typ.clone())
                         .then_ignore(just(Token::CloseBracket))
                         .map(|(size, inner)| TypeArray {
@@ -54,14 +48,17 @@ fn typ() -> impl Parser<Token, ast::Type, Error = Error> {
                 let typ_primitive = choice((
                         number_type.map(TypePrimitive::Number),
                         array_type.map(TypePrimitive::Array),
+                        select! {
+                                Token::Ident(id) if id == "void" => TypePrimitive::Void,
+                                Token::Ident(id) if id == "str" => TypePrimitive::Str,
+                                Token::Ident(id) if id == "never" => TypePrimitive::Never
+                        },
                 ));
-                let typ_nullable = typ.clone().then_ignore(just(Token::Question));
-                let typ_error_union = typ
-                        .clone()
-                        .or_not()
-                        .then_ignore(just(Token::Bang))
-                        .then(typ)
-                        .map(|(error_type, ok_type)| TypeErrorUnion {
+                let typ_nullable = just(Token::Question).ignore_then(typ.clone());
+                let typ_error_union = just(Token::Bang)
+                        .ignore_then(typ.clone())
+                        .then(typ.or_not())
+                        .map(|(ok_type, error_type)| TypeErrorUnion {
                                 error_type: Box::new(error_type),
                                 ok_type: Box::new(ok_type),
                         });
@@ -77,6 +74,10 @@ fn ident_id() -> impl Parser<Token, IdentifierID, Error = Error> {
         ident().map(|id| IdentifierID::new(&id))
 }
 
+fn block() -> impl Parser<Token, Block, Error = Error> {
+        stmt().separated_by(just(Token::Semi))
+}
+
 pub fn help() -> impl Parser<Token, ast::File, Error = Error> {
         let fn_arg = ident_id()
                 .then_ignore(just(Token::Colon))
@@ -88,11 +89,14 @@ pub fn help() -> impl Parser<Token, ast::File, Error = Error> {
                 .then(fn_arg.separated_by(just(Token::Comma)).allow_trailing())
                 .then_ignore(just(Token::CloseParen))
                 .then(typ())
-                .map(|((ident, args), return_type)| ItemFn {
+                .then(block())
+                .map(|(((ident, args), return_type), block)| ItemFn {
                         ident,
                         args,
                         return_type,
                 });
         let item = choice((item_fn.map(ast::Item::Function),));
-        item.repeated().map(|items| ast::File { items })
+        item.repeated()
+                .map(|items| ast::File { items })
+                .then_ignore(end())
 }

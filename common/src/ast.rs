@@ -38,10 +38,7 @@ impl Type {
         pub fn is_sized(&self) -> Option<bool> {
                 match self {
                         Self::Primitive(primitive) => match primitive {
-                                TypePrimitive::Array(TypeArray {
-                                        size: ArraySize::Unknown,
-                                        ..
-                                })
+                                TypePrimitive::Array(TypeArray { size: None, .. })
                                 | TypePrimitive::Str => Some(false),
                                 TypePrimitive::Never => None,
                                 _ => Some(true),
@@ -82,20 +79,13 @@ pub struct TypeReference {
 #[derive(Debug, Clone)]
 pub struct TypeArray {
         pub inner: Box<Type>,
-        pub size: ArraySize,
+        pub size: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypeErrorUnion {
         pub error_type: Box<Option<Type>>,
         pub ok_type: Box<Type>,
-}
-
-#[derive(Debug, Clone)]
-pub enum ArraySize {
-        Known(usize),
-        Unknown,
-        ConstUnknown,
 }
 
 /// Represents a number type, like u8 or i16
@@ -114,3 +104,30 @@ pub enum Signedness {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deref, DerefMut)]
 pub struct Path(pub Vec<IdentifierID>);
+
+#[derive(Debug, Clone)]
+pub struct Block {
+        pub label: Option<IdentifierID>,
+        pub statements: Vec<Statement>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Statement {
+        Call(StatementCall),
+}
+
+#[derive(Debug, Clone)]
+pub struct StatementCall {
+        pub callee: Path,
+        pub args: Vec<Expression>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Expression {
+        Number(ExprNumber),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExprNumber {
+        Binary(Vec<bool>),
+}
