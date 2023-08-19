@@ -5,8 +5,8 @@ use std::{
         num::ParseIntError,
 };
 
-use chumsky::{error::SimpleReason, prelude::Simple, Parser, Stream};
-use logos::{Logos, Span, SpannedIter};
+use chumsky::{Parser, Stream};
+use logos::{Logos, Span};
 
 pub fn fmt_debug<T: Debug>(t: T) -> String {
         format!("{t:?}")

@@ -1,4 +1,4 @@
-use chumsky::{error::Cheap, prelude::*, text::digits};
+use chumsky::{prelude::*, text::digits};
 use tangic_common::{
         ast::{
                 self, ArraySize, ItemFn, Signedness, Type, TypeArray, TypeErrorUnion, TypeNumber,

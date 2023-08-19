@@ -9,10 +9,10 @@ fn report(
         src: &str,
         path: &str,
         a: Color,
-        b: Color,
+        _b: Color,
 ) -> Result<(), std::io::Error> {
         match error {
-                UnifiedError::Parsing(mut parsing) => {
+                UnifiedError::Parsing(parsing) => {
                         for err in parsing.errors {
                                 Report::build(
                                         tangic_reporting::ReportKind::Error,
