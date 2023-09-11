@@ -17,6 +17,7 @@ pub struct ItemFn {
         pub ident: IdentifierID,
         pub args: Vec<FnArgument>,
         pub return_type: Type,
+        pub block: Block,
 }
 
 #[derive(Debug, Clone)]
@@ -89,7 +90,7 @@ pub struct TypeErrorUnion {
 }
 
 /// Represents a number type, like u8 or i16
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeNumber {
         pub signed: Signedness,
         pub bits: u16,
@@ -113,11 +114,18 @@ pub struct Block {
 
 #[derive(Debug, Clone)]
 pub enum Statement {
-        Call(StatementCall),
+        Call(ExprCall),
+        Return(ExprReturn),
 }
 
 #[derive(Debug, Clone)]
-pub struct StatementCall {
+pub struct ExprReturn {
+        pub is_implicit: bool,
+        pub value: Box<Expression>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprCall {
         pub callee: Path,
         pub args: Vec<Expression>,
 }
@@ -125,9 +133,20 @@ pub struct StatementCall {
 #[derive(Debug, Clone)]
 pub enum Expression {
         Number(ExprNumber),
+        Access(Path),
+        Call(ExprCall),
+        Return(ExprReturn),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExprNumber {
-        Binary(Vec<bool>),
+        Float(f64),
+        Normal(ExprNumberNormal),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExprNumberNormal {
+        pub radix: u32,
+        pub number: i64,
+        pub ty: Option<TypeNumber>,
 }

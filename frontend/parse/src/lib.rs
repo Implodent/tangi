@@ -1,22 +1,32 @@
 mod parsers;
 use std::{
         borrow::Cow,
+        collections::HashMap,
         fmt::{Debug, Display},
         num::ParseIntError,
 };
 
-use chumsky::{Parser, Stream};
-use logos::{Logos, Span};
+use aott::{
+        extra,
+        prelude::{InputType, Parser, ParserExtras},
+        stream::Stream,
+};
+use logos::{Lexer, Logos, Span, SpannedIter};
+use tangic_common::ast::ExprNumber;
+use tracing::{debug, info};
 
 pub fn fmt_debug<T: Debug>(t: T) -> String {
         format!("{t:?}")
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct WithSpan<T>(pub T, pub Span);
 impl<T> WithSpan<T> {
         pub fn map<R>(self, f: impl Fn(T) -> R) -> WithSpan<R> {
                 WithSpan(f(self.0), self.1)
+        }
+        pub fn with_span(span: Span) -> impl Fn(T) -> Self {
+                move |t| Self(t, span.clone())
         }
 }
 impl<T: Debug> Display for WithSpan<T> {
@@ -34,13 +44,16 @@ impl<T: Clone> Clone for WithSpan<T> {
         }
 }
 
-#[derive(Logos, Debug, Clone, PartialEq, Eq)]
+#[derive(Logos, Debug, Clone, PartialEq)]
+#[logos(error = ParseError)]
 #[logos(skip r"[\n\r\t\f ]+")]
 pub enum Token {
         #[token("fn")]
         KeywordFn,
         #[token("const")]
         KeywordConst,
+        #[token("return")]
+        KeywordReturn,
         #[token("=")]
         PunctEq,
         #[regex(r"[A-Za-z_][A-Za-z_0-9]*", |lex| lex.slice().to_owned())]
@@ -61,143 +74,169 @@ pub enum Token {
         Colon,
         #[token(",")]
         Comma,
-        #[regex(r"\d+", |lex| lex.slice().parse::<usize>().ok())]
-        Usize(usize),
         #[token("?")]
         Question,
         #[token("!")]
         Bang,
         #[token(";")]
         Semi,
+        #[token("'")]
+        SingleQuote,
+        #[token(".")]
+        Dot,
+        #[regex(r"(0b|0x|0o)?\d+([ui](\d\d?\d?)|size)?", |lex| parsers::parse_number.parse(lex.slice()).map_err(|e| e.error))]
+        Number(ExprNumber),
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Clone)]
 pub enum ParseError {
-        #[error("invalid token, expected {expected:?}, actual: {actual:?}")]
-        InvalidToken {
-                expected: Vec<Cow<'static, str>>,
-                actual: String,
-        },
+        #[error("invalid token, expected {expected:?}, found {found:?}")]
+        InvalidToken { expected: Vec<Token>, found: Token },
         #[error("unexpected end of file")]
         UnexpectedEof,
+        #[error("expected end of file, found {_0:?}")]
+        ExpectedEofFound(Token),
         #[error("integer parse error: {_0}")]
         IntError(#[from] ParseIntError),
         #[error("{_0}")]
         Other(Cow<'static, str>),
+        #[error("parsing error: {_0:?}")]
+        CharParse(#[from] aott::extra::Simple<char>),
 }
 
+#[derive(thiserror::Error, Debug, PartialEq, Clone)]
+#[error("{error} (at {}..{})", span.start, span.end)]
+pub struct Error {
+        pub span: Span,
+        pub error: ParseError,
+}
+impl Default for ParseError {
+        fn default() -> Self {
+                Self::Other(Cow::Borrowed("Fuck you"))
+        }
+}
+
+impl aott::error::Error<Tokens> for Error {
+        type Span = Span;
+        fn expected_eof_found(span: Span, found: aott::MaybeRef<'_, Token>) -> Self {
+                Self {
+                        span,
+                        error: ParseError::ExpectedEofFound(found.into_clone()),
+                }
+        }
+        fn expected_token_found(
+                span: Span,
+                expected: Vec<Token>,
+                found: aott::MaybeRef<'_, Token>,
+        ) -> Self {
+                Self {
+                        span,
+                        error: ParseError::InvalidToken {
+                                expected,
+                                found: found.into_clone(),
+                        },
+                }
+        }
+        fn unexpected_eof(span: Span, _expected: Option<Vec<Token>>) -> Self {
+                Self {
+                        span,
+                        error: ParseError::UnexpectedEof,
+                }
+        }
+}
+impl<'a> aott::error::Error<&'a str> for Error {
+        type Span = Span;
+        fn expected_eof_found(
+                span: Span,
+                found: aott::MaybeRef<'_, <&'a str as InputType>::Token>,
+        ) -> Self {
+                Self {
+                        span: span.clone(),
+                        error: ParseError::CharParse(<extra::Simple<char> as aott::error::Error<
+                                &'a str,
+                        >>::expected_eof_found(
+                                span, found
+                        )),
+                }
+        }
+        fn expected_token_found(
+                span: Span,
+                expected: Vec<<&'a str as InputType>::Token>,
+                found: aott::MaybeRef<'_, <&'a str as InputType>::Token>,
+        ) -> Self {
+                Self {
+                        span: span.clone(),
+                        error: ParseError::CharParse(<extra::Simple<char> as aott::error::Error<
+                                &'a str,
+                        >>::expected_token_found(
+                                span, expected, found
+                        )),
+                }
+        }
+        fn unexpected_eof(
+                span: Span,
+                expected: Option<Vec<<&'a str as InputType>::Token>>,
+        ) -> Self {
+                Self {
+                        span: span.clone(),
+                        error: ParseError::CharParse(<extra::Simple<char> as aott::error::Error<
+                                &'a str,
+                        >>::unexpected_eof(
+                                span, expected
+                        )),
+                }
+        }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Extra;
+impl ParserExtras<Tokens> for Extra {
+        type Error = Error;
+        type Context = ();
+}
+
+impl<'a> ParserExtras<&'a str> for Extra {
+        type Context = ();
+        type Error = Error;
+}
+
+type Tokens = Stream<Box<dyn Iterator<Item = Token>>>;
+
+#[tracing::instrument(err(Debug), ret)]
 pub fn parse(src: &str) -> Result<tangic_common::ast::File, Vec<Error>> {
         let eoi = src.len()..src.len() + 1;
-        for (token, span) in Token::lexer(src).spanned() {
-                println!("{token:?} @ {}..{}", span.start, span.end);
-        }
-        parsers::help().parse(Stream::from_iter(
-                eoi,
-                Token::lexer(src)
-                        .spanned()
-                        .map(|result| (result.0.unwrap(), result.1)),
-        ))
-}
+        let src_leaked: &'static mut str = Box::leak(src.to_owned().into_boxed_str());
+        let mut errors = vec![];
+        let mut tokens = vec![];
+        for (n, (token, span)) in Token::lexer(src).spanned().enumerate() {
+                match token {
+                        Ok(token) => {
+                                debug!(%span.start, %span.end, ?token);
 
-#[derive(Debug, Default)]
-pub struct Error {
-        pub labels: Vec<String>,
-        pub errors: Vec<WithSpan<ParseError>>,
-}
-
-impl Error {
-        pub fn new(span: Span, e: ParseError) -> Self {
-                Self {
-                        labels: vec![],
-                        errors: vec![WithSpan(e, span)],
+                                tokens.insert(n, (token, span));
+                        }
+                        Err(error) => errors.push(Error { span, error }),
                 }
         }
-        pub fn other(span: Span, reason: Cow<'static, str>) -> Self {
-                Self {
-                        labels: vec![],
-                        errors: vec![WithSpan(ParseError::Other(reason), span)],
-                }
+        if !errors.is_empty() {
+                return Err(errors);
         }
-        pub fn merge_(mut self, other: Self) -> Self {
-                self.errors.extend(other.errors);
-                self.labels.extend(other.labels);
-                self
+
+        let result = parsers::file.parse(Stream::from_iter(
+                <Token as Logos<'static>>::lexer(src_leaked).map(unwrap_unchecked as fn(_) -> _),
+        )
+        .boxed());
+        match result {
+                Ok(ast) => Ok(ast),
+                Err(mut e) => {
+                        e.span = tokens.get(e.span.start).unwrap().1.start
+                                ..tokens.get(e.span.end).unwrap().1.end;
+                        errors.push(e);
+                        Err(errors)
+                }
         }
 }
 
-impl chumsky::Error<Token> for Error {
-        type Span = Span;
-        type Label = String;
-
-        fn expected_input_found<Iter: IntoIterator<Item = Option<Token>>>(
-                span: Self::Span,
-                expected: Iter,
-                found: Option<Token>,
-        ) -> Self {
-                Self {
-                        errors: vec![WithSpan(
-                                match found {
-                                        Some(found) => ParseError::InvalidToken {
-                                                expected: expected
-                                                        .into_iter()
-                                                        .map(|opt| {
-                                                                opt.map(fmt_debug)
-                                                                        .map(Cow::Owned)
-                                                                        .unwrap_or(Cow::Borrowed(
-                                                                                "end of file",
-                                                                        ))
-                                                        })
-                                                        .collect(),
-                                                actual: fmt_debug(found),
-                                        },
-                                        None => ParseError::UnexpectedEof,
-                                },
-                                span,
-                        )],
-                        labels: vec![],
-                }
-        }
-        fn merge(self, other: Self) -> Self {
-                self.merge_(other)
-        }
-        fn with_label(mut self, label: Self::Label) -> Self {
-                self.labels.push(label);
-                self
-        }
-}
-
-impl chumsky::Error<char> for Error {
-        type Span = Span;
-        type Label = String;
-
-        fn expected_input_found<Iter: IntoIterator<Item = Option<char>>>(
-                span: Self::Span,
-                expected: Iter,
-                found: Option<char>,
-        ) -> Self {
-                Self::new(
-                        span,
-                        match found {
-                                Some(found) => ParseError::InvalidToken {
-                                        expected: expected
-                                                .into_iter()
-                                                .map(|t| {
-                                                        t.map(|cr| cr.to_string())
-                                                                .map(Cow::Owned)
-                                                                .unwrap_or(Cow::Borrowed("EOF"))
-                                                })
-                                                .collect(),
-                                        actual: found.to_string(),
-                                },
-                                None => ParseError::UnexpectedEof,
-                        },
-                )
-        }
-        fn merge(self, other: Self) -> Self {
-                self.merge_(other)
-        }
-        fn with_label(mut self, label: Self::Label) -> Self {
-                self.labels.push(label);
-                self
-        }
+fn unwrap_unchecked(result: Result<Token, ParseError>) -> Token {
+        unsafe { result.unwrap_unchecked() }
 }

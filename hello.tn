@@ -1,1 +1,3 @@
-fn hi(a: i32) ![?i32]?i32
+fn hi(a: i8) i8 {
+   return 19;
+}

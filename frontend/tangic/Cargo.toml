@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+backtrace-on-stack-overflow = "0.3.0"
 tangic_parse.path = "../parse"
 tangic_reporting.path = "../reporting"
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
