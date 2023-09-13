@@ -16,7 +16,7 @@ A block is a block containing multiple statements, that could also be expression
 ***** Return statement
 A return statement is a statement that, if reached, stops execution of current block,
 and returns the specified value (like in ~return 128~ 128 is the return value),
-or ~void~, if no return value is specified. (like ~return~)
+or ~()~, if no return value is specified. (like ~return~)
 ***** If statement
 An if statement has different styles:
 - Quick
@@ -28,45 +28,31 @@ An if statement has different styles:
 All of them have the same functionality
 
 ("breaking barriers", literally)
-***** Let statement
-A let statement lets (haha because ~let~ hahahaha) you declare
-a variable, optionally making it mutable by declaring it with ~let mut~.
+***** Variable declaration
+In Tangi, you declare variables, ... in a.. different way.
 
 #+begin_example tangi
-let mut something = true;
+let something = true;
+
+// or mutably:
+mut bonk = -1e8;
 #+end_example
 
 You could also declare it with a type, although usually it is inferred.
 #+begin_example tangi
-let variable: i32 = -18;
+i32 variable = -18;
+
+// or mutably:
+
+mut i12 y = 147;
 #+end_example
 
-If you declare a variable with ~const const const const~, you will just disintegrate the value.
-#+begin_example tangi
-const const const const help = 0;
-#+end_example
-If you use ~const const const const~ with a ~Copy~ value, you will get a compile error because fuck you.
-The above example will error, because it disintegrates a ~Copy~ value.
-
-****** Variable redeclaration
-In Tangi, you could redeclare variables.
-Also used with the ~const const const const~ syntax to disintegrate a function parameter or otherwise unused variable.
-#+begin_example tangi
-fn hello(remy_clarke: RemyClarke, int: i32) {
-    // disintegrates `remy_clarke`
-    const const const const remy_clarke;
-    // redeclares `int` as a mutable `i32`, giving it the value of the function param `int`
-    let mut int;
-    // ==
-    let mut int: i32 = int;
-}
-#+end_exmaple
 ***** For statement and other loops
 The ~for~ statement lets you loop over the contents of a value implementing ~Iterator~.
 
 #+begin_example tangi
 // compile error - int too large
-for (0..190238102381283018230182380180923890128903189023980129803 as h) {
+for h <- 0..190238102381283018230182380180923890128903189023980129803 {
     std.debug.eprintln("{}", h);
 }
 #+end_example

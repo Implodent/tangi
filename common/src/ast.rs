@@ -10,6 +10,7 @@ pub struct File {
 #[derive(Debug, Clone)]
 pub enum Item {
         Function(ItemFn),
+        Constant(ItemConst),
 }
 
 #[derive(Debug, Clone)]
@@ -18,6 +19,13 @@ pub struct ItemFn {
         pub args: Vec<FnArgument>,
         pub return_type: Type,
         pub block: Block,
+}
+
+#[derive(Debug, Clone)]
+pub struct ItemConst {
+        pub ident: IdentifierID,
+        pub ty: Type,
+        pub value: Expression,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +41,7 @@ pub enum Type {
         DynamicDispatch(TypeDyn),
         Nullable(Box<Type>),
         ErrorUnion(TypeErrorUnion),
+        Path(Path),
 }
 
 impl Type {
@@ -58,6 +67,7 @@ pub enum TypePrimitive {
         Str,
         Never,
         Void,
+        Bool,
 }
 
 #[derive(Debug, Clone)]
@@ -85,7 +95,7 @@ pub struct TypeArray {
 
 #[derive(Debug, Clone)]
 pub struct TypeErrorUnion {
-        pub error_type: Box<Option<Type>>,
+        pub error_type: Option<Box<Type>>,
         pub ok_type: Box<Type>,
 }
 
@@ -116,6 +126,20 @@ pub struct Block {
 pub enum Statement {
         Call(ExprCall),
         Return(ExprReturn),
+        If(ExprIf),
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprIf {
+        pub condition: Box<Expression>,
+        pub statements: Vec<Statement>,
+        pub else_branches: Vec<ExprElse>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprElse {
+        pub condition: Option<Box<Expression>>,
+        pub statements: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +160,7 @@ pub enum Expression {
         Access(Path),
         Call(ExprCall),
         Return(ExprReturn),
+        Boolean(bool),
 }
 
 #[derive(Debug, Clone, PartialEq)]

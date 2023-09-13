@@ -1,6 +1,6 @@
 use tangic_reporting::{Color, ColorGenerator, Label, Report, Source};
 use tracing::{self, Level};
-use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use tracing_subscriber::filter::LevelFilter;
 
 enum UnifiedError {
         Parsing(tangic_parse::Error),
@@ -11,20 +11,81 @@ fn report(
         src: &str,
         path: &str,
         a: Color,
-        _b: Color,
+        b: Color,
 ) -> Result<(), std::io::Error> {
         match error {
                 UnifiedError::Parsing(e) => {
-                        Report::build(tangic_reporting::ReportKind::Error, path, e.span.start)
-                                .with_code(1)
-                                .with_message(format!("{}", e))
-                                .with_label(
-                                        Label::new((path, e.span))
-                                                .with_message("here")
-                                                .with_color(a),
-                                )
-                                .finish()
-                                .eprint((path, Source::from(src)))?
+                        let mut report = Report::build(
+                                tangic_reporting::ReportKind::Error,
+                                path,
+                                e.span.start,
+                        );
+                        match e.error {
+                                tangic_parse::ParseError::CharParse(e) => {
+                                        report.set_message(e.to_string());
+                                        report.add_label(
+                                                Label::new((path, e.span))
+                                                        .with_color(b)
+                                                        .with_message("here"),
+                                        );
+                                }
+                                tangic_parse::ParseError::Expected { expected, found } => {
+                                        report.set_message(format!(
+                                                "expected {expected}, found {found:?}"
+                                        ));
+                                        report.add_label(
+                                                Label::new((path, e.span))
+                                                        .with_color(b)
+                                                        .with_message("here"),
+                                        );
+                                }
+                                tangic_parse::ParseError::ExpectedEofFound(token) => {
+                                        report.set_message(format!(
+                                                "expected end of file, found {token:?}"
+                                        ));
+                                        report.add_label(
+                                                Label::new((path, e.span.start..e.span.start))
+                                                        .with_color(a)
+                                                        .with_message("this token"),
+                                        );
+                                }
+                                tangic_parse::ParseError::IntError(i) => {
+                                        report.set_message(i);
+                                        report.add_label(
+                                                Label::new((path, e.span))
+                                                        .with_color(b)
+                                                        .with_message("here"),
+                                        );
+                                }
+                                tangic_parse::ParseError::InvalidToken { expected, found } => {
+                                        report.set_message(format!(
+                                                "expected {expected:?}, found {found:?}"
+                                        ));
+                                        report.add_label(
+                                                Label::new((path, e.span))
+                                                        .with_color(b)
+                                                        .with_message("here"),
+                                        );
+                                }
+                                tangic_parse::ParseError::Other(reason) => {
+                                        report.set_message(reason);
+                                        report.add_label(
+                                                Label::new((path, e.span))
+                                                        .with_color(b)
+                                                        .with_message("here"),
+                                        );
+                                }
+                                tangic_parse::ParseError::UnexpectedEof => {
+                                        report.set_message("unexpected end of file");
+                                        report.add_label(
+                                                Label::new((path, e.span))
+                                                        .with_color(b)
+                                                        .with_message("here"),
+                                        );
+                                }
+                        };
+
+                        report.finish().eprint((path, Source::from(src)))?
                 }
         }
         Ok(())

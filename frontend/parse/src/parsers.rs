@@ -1,209 +1,317 @@
 use aott::{extra, prelude::*, select};
-use std::borrow::Cow;
+use std::{borrow::Cow, mem::replace};
 use tracing::*;
 
 use super::{Error, *};
 use aott::text::*;
 use logos::Span;
-use tangic_common::{
-        ast::{
-                self, Block, ExprCall, ExprNumber, ExprNumberNormal, ExprReturn, Expression, File,
-                Item, ItemFn, Path, Signedness, Statement, Type, TypeArray, TypeErrorUnion,
-                TypeNumber, TypePrimitive,
-        },
-        interner::IdentifierID,
-};
+use tangic_common::{ast::*, interner::IdentifierID};
 
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
-fn nrtype_ident(input: &str) -> TypeNumber {
-        let signed = choice((
-                just('u').to(Signedness::Unsigned),
-                just('i').to(Signedness::Signed),
-        ))
-        .parse_with(input)?;
-        let bits = digits(10)
-                .slice()
-                .try_map_with_span(|s: &str, span| {
-                        s.parse::<u16>().map_err(|e| Error {
-                                span,
-                                error: e.into(),
-                        })
-                })
-                .parse_with(input)?;
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
+fn numtype(input: &str) -> TypeNumber {
+        let signed = match one_of(['i', 'u'])(input)? {
+                'i' => Signedness::Signed,
+                'u' => Signedness::Unsigned,
+                _ => unsafe { std::hint::unreachable_unchecked() },
+        };
+
+        let before = input.offset;
+        let bits = (&input.input[input.offset..std::cmp::min(input.offset + 3, input.input.len())])
+                .parse::<u16>()
+                .map_err(|e| Error {
+                        span: input.span_since(before),
+                        error: e.into(),
+                })?;
+
         Ok(TypeNumber { signed, bits })
 }
 
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
 fn ident(input: Tokens) -> String {
-        select!(Token::Ident(id) => id).parse_with(input)
+        select!(Token::Ident(ident) => ident).parse_with(input)
 }
-
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
-fn usize_token(input: Tokens) -> usize {
-        select!(Token::Number(ExprNumber::Normal(ExprNumberNormal { radix: 10, number, .. })) => number as usize).parse_with(input)
-}
-
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
-fn typ(input: Tokens) -> Type {
-        let number_type = ident.try_map(|s: String| nrtype_ident.parse(s.as_str()));
-        let array_type = just(Token::OpenBracket)
-                .ignore_then(usize_token.optional())
-                .then(typ)
-                .then_ignore(just(Token::CloseBracket))
-                .map(|(size, inner)| TypeArray {
-                        inner: Box::new(inner),
-                        size,
-                });
-        let typ_primitive = choice((
-                number_type.map(TypePrimitive::Number),
-                array_type.map(TypePrimitive::Array),
-                select! {
-                        Token::Ident(id) if id == "void" => TypePrimitive::Void,
-                        Token::Ident(id) if id == "str" => TypePrimitive::Str,
-                        Token::Ident(id) if id == "never" => TypePrimitive::Never
-                },
-        ));
-        let typ_nullable = just(Token::Question).ignore_then(typ);
-        let typ_error_union = typ.optional().then(just(Token::Bang).ignore_then(typ)).map(
-                |(error_type, ok_type)| TypeErrorUnion {
-                        error_type: Box::new(error_type),
-                        ok_type: Box::new(ok_type),
-                },
-        );
-        choice((
-                typ_primitive.map(Type::Primitive),
-                typ_nullable.map(Box::new).map(Type::Nullable),
-                typ_error_union.boxed().map(Type::ErrorUnion),
-        ))
-        .parse_with(input)
-}
-
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
 fn ident_id(input: Tokens) -> IdentifierID {
-        Ok(IdentifierID::new(&ident(input)?))
-}
-
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
-fn path(input: Tokens) -> Path {
-        ident_id.separated_by(just(Token::Dot))
-                .map(Path)
-                .parse_with(input)
-}
-
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
-fn expr(input: Tokens) -> Expression {
-        let call = path
-                .then_ignore(just(Token::OpenParen))
-                .then_ignore(just(Token::CloseParen))
-                .map(|callee| ExprCall {
-                        callee,
-                        args: vec![],
-                });
-        let retn = just(Token::KeywordReturn)
-                .ignore_then(expr)
-                .then_ignore(just(Token::Semi))
-                .map(|expr| ExprReturn {
-                        is_implicit: false,
-                        value: Box::new(expr),
-                })
-                .or(expr.map(|expr| ExprReturn {
-                        is_implicit: true,
-                        value: Box::new(expr),
-                }));
-        let number = select!(Token::Number(number) => number);
-        choice((
-                number.map(Expression::Number),
-                retn.map(Expression::Return),
-                call.map(Expression::Call),
-                path.map(Expression::Access),
-        ))
-        .parse_with(input)
-}
-
-fn expected_statement(span: Span) -> Error {
-        Error {
-                span,
-                error: ParseError::Other(Cow::Borrowed("expected statement")),
-        }
-}
-
-macro_rules! try_match {
-        ($initial:expr; $expected:ident =>> {$($pat:pat$(if $guard:expr)? => $expr:expr),*}) => {
-                $initial.try_map_with_span(|__out, __span| match __out {
-                        $($pat$(if $guard)? => Ok($expr)),*,
-                        _ => Err($expected(__span))
-                })
-        };
-        ($initial:expr; $expected:ident =>> $ty:ident$(::$en:ident)?($field:ident)$(if $guard:expr)? => $expr:expr) => {
-                try_match!($initial; $expected =>> { $ty$(::$en)?($field)$(if $guard)? => $expr })
-        };
-}
-
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
-fn stmt(input: Tokens) -> Statement {
-        let before = input.offset;
-        Ok(match expr(input)? {
-                Expression::Call(call) => Statement::Call(call),
-                Expression::Return(ret) => Statement::Return(ret),
-                _ => return Err(expected_statement(input.span_since(before))),
-        })
-}
-
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
-fn block(input: Tokens) -> Block {
-        delimited(
-                just(Token::OpenCurly),
-                stmt.repeated(),
-                just(Token::CloseCurly),
-        )
-        .map(|statements| Block {
-                label: None,
-                statements,
-        })
-        .parse_with(input)
+        select!(Token::Ident(ident) => IdentifierID::new(&ident)).parse_with(input)
 }
 
 #[parser(extras = Extra)]
-#[tracing::instrument(ret)]
-fn item_fn(input: Tokens) -> ItemFn {
-        let fn_arg = ident_id
-                .then_ignore(just(Token::Colon))
-                .then(typ)
-                .map(|(name, ty)| ast::FnArgument { name, ty });
+#[instrument(ret, err)]
+fn path(input: Tokens) -> Path {
+        enum State {
+                Start(String),
+                Delimiter,
+                Done,
+        }
+        let mut state = State::Start(ident(input)?);
+        let mut path = Path(vec![]);
 
-        just(Token::KeywordFn).check_with(input)?;
-        Ok(ItemFn {
-                ident: ident_id(input)?,
-                args: delimited(
-                        just(Token::OpenParen),
-                        fn_arg.separated_by(just(Token::Comma)).allow_trailing(),
-                        just(Token::CloseParen),
-                )(input)?,
-                return_type: typ(input)?,
-                block: block(input)?,
+        loop {
+                match replace(&mut state, State::Done) {
+                        State::Start(ident) => {
+                                state = State::Delimiter;
+                                path.0.push(IdentifierID::new(&ident))
+                        }
+                        State::Delimiter => {
+                                state = match just(Token::Dot).optional().parse_with(input)? {
+                                        Some(_) => State::Start(ident(input)?),
+                                        None => State::Done,
+                                };
+                        }
+                        State::Done => break,
+                }
+        }
+
+        Ok(path)
+}
+
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
+fn typ(input: Tokens) -> Type {
+        let before_ty = input.save();
+        let t = match input.next()? {
+                Token::Bang => Type::ErrorUnion(TypeErrorUnion {
+                        error_type: None,
+                        ok_type: Box::new(typ(input)?),
+                }),
+                Token::Ident(ident) => match ident.as_str() {
+                        "bool" => Type::Primitive(TypePrimitive::Bool),
+                        "never" => Type::Primitive(TypePrimitive::Never),
+                        "str" => Type::Primitive(TypePrimitive::Str),
+
+                        _ => {
+                                if let Some(Token::Dot) = input.peek() {
+                                        input.rewind(before_ty);
+
+                                        Type::Path(path(input)?)
+                                } else {
+                                        Type::Path(Path(vec![IdentifierID::new(&ident)]))
+                                }
+                        }
+                },
+                Token::Ampersand => {
+                        let mut t = TypeReference {
+                                lifetime: None,
+                                mutable: false,
+                                inner: Box::new(Type::Primitive(TypePrimitive::Never)),
+                        };
+                        let before = input.save();
+
+                        match input.next()? {
+                                Token::SingleQuote => {
+                                        t.lifetime = Some(ident_id(input)?);
+
+                                        let before_ = input.save();
+                                        if let Token::KeywordMut = input.next()? {
+                                                t.mutable = true;
+                                        } else {
+                                                input.rewind(before_);
+                                        }
+                                }
+                                Token::KeywordMut => t.mutable = true,
+
+                                _ => t.inner = Box::new(typ(input)?),
+                        };
+
+                        Type::Reference(t)
+                }
+                Token::Question => Type::Nullable(Box::new(typ(input)?)),
+                token => {
+                        return Err(crate::Error {
+                                span: input.span_since(before_ty.offset),
+                                error: ParseError::Expected {
+                                        expected: Cow::Borrowed("a type"),
+                                        found: vec![token],
+                                },
+                        })
+                }
+        };
+
+        Ok(if let Some(Token::Bang) = input.peek() {
+                input.skip()?;
+
+                Type::ErrorUnion(TypeErrorUnion {
+                        error_type: Some(Box::new(t)),
+                        ok_type: Box::new(typ(input)?),
+                })
+        } else {
+                t
         })
 }
 
-#[parser(extras = "Extra")]
-#[tracing::instrument(ret)]
-pub fn file(input: Tokens) -> File {
-        item_fn.map(Item::Function)
-                .repeated()
-                .map(|items| ast::File { items })
-                .then_ignore(end)
-                .parse_with(input)
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
+fn expr(input: Tokens) -> Expression {
+        Ok(match input.next()? {
+                Token::KeywordTrue => Expression::Boolean(true),
+                Token::KeywordFalse => Expression::Boolean(false),
+                Token::Number(number) => Expression::Number(number),
+                token => {
+                        return Err(Error {
+                                span: input.offset..input.offset,
+                                error: ParseError::Expected {
+                                        expected: Cow::Borrowed("an expression"),
+                                        found: vec![token],
+                                },
+                        })
+                }
+        })
 }
 
-#[parser(extras = "Extra")]
+#[parser(extras = Extra)]
+fn stmt_if(input: Tokens) -> ExprIf {
+        enum Style {
+                Quick,
+                C,
+                Rust,
+        }
+        try {
+                let style = Style::Quick;
+                let condition = match input.peek() {
+                        Token::OpenParen => {
+                                style = Style::C;
+
+                                delimited(just(Token::OpenParen), expr, just(Token::CloseParen))(
+                                        input,
+                                )?
+                        }
+
+                        _ => expr(input)?,
+                };
+                match input.peek() {
+                        Token::FatArrow => {}
+                }
+                ExprIf {}
+        }
+}
+
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
+fn stmt(input: Tokens) -> Statement {
+        try {
+                let before = input.save();
+                match input.next()? {
+                        Token::KeywordReturn => Statement::Return(ExprReturn {
+                                is_implicit: false,
+                                value: Box::new(
+                                        expr.then_ignore(just(Token::Semi).optional())
+                                                .parse_with(input)?,
+                                ),
+                        }),
+                        Token::KeywordIf => {
+                                input.rewind(before);
+                                Statement::If(stmt_if(input)?)
+                        }
+                        token => {
+                                return Err(Error {
+                                        span: input.offset..input.offset,
+                                        error: ParseError::Expected {
+                                                expected: Cow::Borrowed("a statement"),
+                                                found: vec![token],
+                                        },
+                                })
+                        }
+                }
+        }
+}
+
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
+fn item_fn(input: Tokens) -> ItemFn {
+        try {
+                just(Token::KeywordFn)(input)?;
+
+                // Nested parsers.
+                // Nested parsers.
+                #[parser(extras = Extra)]
+                fn arg(input: Tokens) -> FnArgument {
+                        try {
+                                FnArgument {
+                                        name: ident_id
+                                                .then_ignore(just(Token::Colon))
+                                                .parse_with(input)?,
+                                        ty: typ(input)?,
+                                }
+                        }
+                }
+
+                ItemFn {
+                        ident: ident_id(input)?,
+                        args: delimited(
+                                just(Token::OpenParen),
+                                arg.separated_by(just(Token::Comma)).allow_trailing(),
+                                just(Token::CloseParen),
+                        )(input)?,
+                        return_type: typ(input)?,
+                        block: Block {
+                                label: None,
+                                statements: delimited(
+                                        just(Token::OpenCurly),
+                                        stmt.repeated(),
+                                        just(Token::CloseCurly),
+                                )(input)?,
+                        },
+                }
+        }
+}
+// #[parser(extras = Extra)]
+// fn item_const(input: Tokens) -> ItemConst {
+//         just(Token::KeywordConst)(input)?;
+
+//         let ident = ident_id(input)?;
+
+//         just(Token::Colon)(input)?;
+
+//         let ty = typ(input)?;
+
+//         just(Token::PunctEq)(input)?;
+
+//         let value = expr(input)?;
+
+//         Ok(ItemConst { ident, ty, value })
+// }
+
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
+fn item(input: Tokens) -> Item {
+        Ok(match input.peek() {
+                Some(Token::KeywordFn) => item_fn(input).map(Item::Function)?,
+                // Some(Token::KeywordConst) => item_const(input).map(Item::Constant),
+                Some(token) => {
+                        return Err(Error {
+                                span: input.offset..(input.offset + 1),
+                                error: ParseError::Expected {
+                                        expected: Cow::Borrowed(
+                                                "an item (a function, a constant etc.)",
+                                        ),
+                                        found: vec![token],
+                                },
+                        })
+                }
+                None => {
+                        return Err(Error {
+                                span: input.offset..(input.offset + 1),
+                                error: ParseError::UnexpectedEof,
+                        })
+                }
+        })
+}
+
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
+pub fn file(input: Tokens) -> File {
+        try {
+                File {
+                        items: item.repeated().then_ignore(end).parse_with(input)?,
+                }
+        }
+}
+
+#[parser(extras = Extra)]
+#[instrument(ret, err)]
 pub fn parse_number(input: &str) -> ExprNumber {
         const HEX: u32 = 16;
         const BIN: u32 = 2;
@@ -215,7 +323,7 @@ pub fn parse_number(input: &str) -> ExprNumber {
                 .parse_with(input)?;
         let before = input.offset;
         let digits = slice(digits(radix)).parse_with(input)?;
-        let ty = nrtype_ident.optional().parse_with(input)?;
+        let ty = numtype.optional().parse_with(input)?;
         Ok(ExprNumber::Normal(ExprNumberNormal {
                 number: digits.parse::<i64>().map_err(|e| Error {
                         span: input.span_since(before),

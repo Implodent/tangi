@@ -1,3 +1,4 @@
+#![feature(try_blocks)]
 mod parsers;
 use std::{
         borrow::Cow,
@@ -54,6 +55,20 @@ pub enum Token {
         KeywordConst,
         #[token("return")]
         KeywordReturn,
+        #[token("let")]
+        KeywordLet,
+        #[token("mut")]
+        KeywordMut,
+        #[token("true")]
+        KeywordTrue,
+        #[token("false")]
+        KeywordFalse,
+        #[token("if")]
+        KeywordIf,
+        #[token("else")]
+        KeywordElse,
+        #[token("=>")]
+        FatArrow,
         #[token("=")]
         PunctEq,
         #[regex(r"[A-Za-z_][A-Za-z_0-9]*", |lex| lex.slice().to_owned())]
@@ -84,6 +99,8 @@ pub enum Token {
         SingleQuote,
         #[token(".")]
         Dot,
+        #[token("&")]
+        Ampersand,
         #[regex(r"(0b|0x|0o)?\d+([ui](\d\d?\d?)|size)?", |lex| parsers::parse_number.parse(lex.slice()).map_err(|e| e.error))]
         Number(ExprNumber),
 }
@@ -102,6 +119,11 @@ pub enum ParseError {
         Other(Cow<'static, str>),
         #[error("parsing error: {_0:?}")]
         CharParse(#[from] aott::extra::Simple<char>),
+        #[error("expected {expected}, found {found:?}")]
+        Expected {
+                expected: Cow<'static, str>,
+                found: Vec<Token>,
+        },
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Clone)]
@@ -110,6 +132,7 @@ pub struct Error {
         pub span: Span,
         pub error: ParseError,
 }
+
 impl Default for ParseError {
         fn default() -> Self {
                 Self::Other(Cow::Borrowed("Fuck you"))
@@ -200,7 +223,7 @@ impl<'a> ParserExtras<&'a str> for Extra {
         type Error = Error;
 }
 
-type Tokens = Stream<Box<dyn Iterator<Item = Token>>>;
+type Tokens = Stream<std::iter::Map<Lexer<'static, Token>, fn(Result<Token, ParseError>) -> Token>>;
 
 #[tracing::instrument(err(Debug), ret)]
 pub fn parse(src: &str) -> Result<tangic_common::ast::File, Vec<Error>> {
@@ -212,7 +235,6 @@ pub fn parse(src: &str) -> Result<tangic_common::ast::File, Vec<Error>> {
                 match token {
                         Ok(token) => {
                                 debug!(%span.start, %span.end, ?token);
-
                                 tokens.insert(n, (token, span));
                         }
                         Err(error) => errors.push(Error { span, error }),
@@ -221,11 +243,9 @@ pub fn parse(src: &str) -> Result<tangic_common::ast::File, Vec<Error>> {
         if !errors.is_empty() {
                 return Err(errors);
         }
-
         let result = parsers::file.parse(Stream::from_iter(
                 <Token as Logos<'static>>::lexer(src_leaked).map(unwrap_unchecked as fn(_) -> _),
-        )
-        .boxed());
+        ));
         match result {
                 Ok(ast) => Ok(ast),
                 Err(mut e) => {
