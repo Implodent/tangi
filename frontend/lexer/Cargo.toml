@@ -1,0 +1,7 @@
+[package]
+name = "tangic_lexer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+logos = "0.13.0"

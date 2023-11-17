@@ -1,0 +1,57 @@
+struct A {
+  pub f1: i32
+}
+
+impl A {
+  (&self)i32 repr = self.f1
+}
+
+trait Iterator {
+  type Item
+
+  (&mut self)?Self.Item next
+}
+
+impl Iterator for A {
+  type Item = i32
+
+  (&mut self)?Self.Item next {
+    let value = self.f1
+
+    self.f1 = self.f1.saturating_sub 1
+
+    value
+  }
+}
+
+(type T, type U, T)U force_cast value {
+  if !std.canCast T U => @compile_error & @fmt("cannot cast {} to {}", std.typeName T, std.typeName U)
+
+  unsafe { std.force_cast T U value }
+}
+
+trait Monad {
+  type Item
+
+  (Self.Item)Self pure
+}
+
+(type A, type B)bool TypeEq = A == B
+
+trait Functor where TypeEq(Self, Self.This[Self.Item]) {
+  type Item
+
+  type This[T]: Functor[Item = T]
+
+  (type U, self, impl Fn(Self.Item, Output = U))Self.This[U] fmap
+}
+
+trait Applicative: Functor[Item = Self.Item] {
+  type Item
+}
+
+trait Semigroup: Functor[Item = Self.Item] {
+  type Item
+
+  (self, Self)Self <>
+}
