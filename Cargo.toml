@@ -13,3 +13,6 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
+tangic_lexer.path = "frontend/lexer"
+tangic_parser.path = "frontend/parser"
+miette = "5.10.0"

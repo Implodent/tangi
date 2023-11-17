@@ -1,14 +1,21 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+use aott::{input::SpannedInput, prelude::*};
+
+use std::ops::Range;
+
+use tangic_lexer::*;
+
+pub struct What<'a> {
+    input: &'static str,
+    what: SpannedInput<Token, Range<usize>, Stream<Lexer<'a, Token>>>
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl<'a> InputType for What<'a> {
+    type Token = Token;
+    type OwnedMut = Lexer<'a, Token>;
+    type Offset = usize;
+    type Span = Range<usize>;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    fn span(&self, span: Range<usize>) -> Self::Span {
+        self.what.span(span)
     }
 }

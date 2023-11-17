@@ -3,6 +3,6 @@ name = "tangic_parser"
 version.workspace = true
 edition.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+aott = { git = "https://github.com/Implodent/AOTT.git", version = "0.3.0", default-features = false }
+tangic_lexer.workspace = true
