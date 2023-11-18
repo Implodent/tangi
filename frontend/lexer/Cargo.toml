@@ -5,3 +5,5 @@ edition.workspace = true
 
 [dependencies]
 logos = "0.13.0"
+thiserror.workspace = true
+miette.workspace = true
