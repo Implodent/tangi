@@ -6,3 +6,6 @@ edition.workspace = true
 [dependencies]
 aott = { git = "https://github.com/Implodent/AOTT.git", version = "0.3.0", default-features = false }
 tangic_lexer.workspace = true
+tangic_ast.workspace = true
+thiserror.workspace = true
+miette.workspace = true

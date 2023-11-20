@@ -3,29 +3,70 @@
 use std::ops::Range;
 
 pub use logos::{Lexer, Logos, SpannedIter};
+use miette::SourceSpan;
 
-#[derive(Logos, Debug, Clone)]
+#[derive(Logos, Debug, Clone, PartialEq, derive_more::Display)]
+#[logos(skip r"[ \t\n\f]+")]
 pub enum Token {
+    #[display(fmt = "an identifier \"{_0}\"")]
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_owned())]
     Identifier(String),
+    #[display(fmt = "a string literal \"{_0}\"")]
     #[regex(r#""[^"]*""#, |lex| { let slice = lex.slice(); slice[1..slice.len()-1].to_owned() })]
     StringLiteral(String),
+    #[display(fmt = "an opening curly brace {{")]
     #[token("{")]
     OpenCurly,
+    #[display(fmt = "a closing curly brace }}")]
     #[token("}")]
     CloseCurly,
+    #[display(fmt = "a dot .")]
     #[token(".")]
     Dot,
+    #[display(fmt = "a comma ,")]
     #[token(",")]
     Comma,
+    #[display(fmt = "an @ sign")]
     #[token("@")]
     At,
 }
 
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum TokenKind {
+    #[error("an identifier")]
+    Identifier,
+    #[error("a string literal")]
+    StringLiteral,
+    #[error("an opening curly brace {{")]
+    OpenCurly,
+    #[error("a closing curly brace }}")]
+    CloseCurly,
+    #[error("a dot .")]
+    Dot,
+    #[error("a comma ,")]
+    Comma,
+    #[error("an @ sign")]
+    At,
+}
+
+impl Token {
+    pub fn kind(&self) -> TokenKind {
+        match self {
+            Self::At => TokenKind::At,
+            Self::Comma => TokenKind::Comma,
+            Self::OpenCurly => TokenKind::OpenCurly,
+            Self::CloseCurly => TokenKind::CloseCurly,
+            Self::Dot => TokenKind::Dot,
+            Self::Identifier(_) => TokenKind::Identifier,
+            Self::StringLiteral(_) => TokenKind::StringLiteral
+        }
+    }
+}
+
 #[derive(thiserror::Error, Debug, miette::Diagnostic)]
-#[error("Lexer error at {}..{}", self.0.start, self.0.end)]
+#[error("lexer error")]
 #[diagnostic(code = "tangi::lexer")]
-pub struct LexerError(pub Range<usize>);
+pub struct LexerError(#[label = "here"] pub SourceSpan);
 
 pub struct Help {
     j: <Vec<(Token, Range<usize>)> as IntoIterator>::IntoIter,
@@ -40,7 +81,7 @@ impl Help {
         while let Some(s) = lexer.next() {
             match s {
                 (Ok(j), span) => guh.push((j, span)),
-                (Err(()), span) => help.push(LexerError(span))
+                (Err(()), span) => help.push(LexerError(span.into()))
             }
         };
 
@@ -57,5 +98,9 @@ impl Iterator for Help {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.j.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.j.size_hint()
     }
 }
