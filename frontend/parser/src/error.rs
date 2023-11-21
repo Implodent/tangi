@@ -1,7 +1,7 @@
-use std::ops::Range;
+use std::{ops::Range, num::ParseIntError};
 
 use aott::error::LabelError;
-use miette::{SourceCode, SourceSpan};
+use miette::SourceCode;
 use tangic_lexer::{LexerError, Token, TokenKind};
 
 use crate::adapters::TokenStream;
@@ -15,7 +15,7 @@ pub enum ParserError {
     #[diagnostic()]
     UnexpectedEof {
         #[label = "more tokens expected here"]
-        at: SourceSpan,
+        at: Range<usize>,
         expected: Vec<Expectation>,
     },
     #[error("expected {} but found {found}", if expectation.is_empty() { format!("nothing (???)")} else { expectation.iter().map(ToString::to_string).collect::<Vec<String>>().join(" or ") })]
@@ -24,8 +24,14 @@ pub enum ParserError {
         expectation: Vec<Expectation>,
         found: Token,
         #[label = "here"]
-        at: SourceSpan,
+        at: Range<usize>,
     },
+    #[error("number parsing error: {error}")]
+    NumberError {
+        error: ParseIntError,
+        #[label = "here"]
+        at: Range<usize>,
+    }
 }
 
 #[derive(thiserror::Error, Debug, Clone, miette::Diagnostic)]
@@ -41,6 +47,10 @@ pub enum Expectation {
     EndOfInput,
     #[error("a visibility (pub, pub(crate), etc.)")]
     Visibility,
+    #[error("a pattern")]
+    Pattern,
+    #[error("a type")]
+    Type
 }
 
 impl LabelError<TokenStream, Expectation> for ParserError {
@@ -61,11 +71,11 @@ impl From<Vec<tangic_lexer::LexerError>> for ParserError {
 
 impl aott::error::Error<TokenStream> for ParserError {
     fn unexpected_eof(
-        span: <TokenStream as aott::prelude::InputType>::Span,
+        at: <TokenStream as aott::prelude::InputType>::Span,
         expected: Option<Vec<<TokenStream as aott::prelude::InputType>::Token>>,
     ) -> Self {
         Self::UnexpectedEof {
-            at: (span.start..span.end).into(),
+            at,
             expected: expected
                 .into_iter()
                 .flatten()
@@ -75,18 +85,18 @@ impl aott::error::Error<TokenStream> for ParserError {
     }
 
     fn expected_eof_found(
-        span: <TokenStream as aott::prelude::InputType>::Span,
+        at: <TokenStream as aott::prelude::InputType>::Span,
         found: <TokenStream as aott::prelude::InputType>::Token,
     ) -> Self {
         Self::Expected {
             expectation: vec![Expectation::EndOfInput],
             found,
-            at: span.into(),
+            at,
         }
     }
 
     fn expected_token_found(
-        span: <TokenStream as aott::prelude::InputType>::Span,
+        at: <TokenStream as aott::prelude::InputType>::Span,
         expected: Vec<<TokenStream as aott::prelude::InputType>::Token>,
         found: <TokenStream as aott::prelude::InputType>::Token,
     ) -> Self {
@@ -96,7 +106,7 @@ impl aott::error::Error<TokenStream> for ParserError {
                 .map(|token| Expectation::Kind(token.kind()))
                 .collect(),
             found,
-            at: span.into(),
+            at,
         }
     }
 }

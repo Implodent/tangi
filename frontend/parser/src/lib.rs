@@ -5,6 +5,7 @@ use aott::{pfn_type, prelude::*};
 
 mod adapters;
 pub mod error;
+use ast::TypeReference;
 use error::*;
 use miette::SourceCode;
 use tangic_ast as ast;
@@ -209,7 +210,29 @@ impl Parse for ast::Function {
 impl Parse for ast::Expr {
     #[parser(extras = Extra)]
     fn parse(input: TokenStream) -> Self {
-        choice((just([Token::OpenParen, Token::CloseParen]).to(Self::Void),)).parse_with(input)
+        choice((
+            just([Token::OpenParen, Token::CloseParen]).to(Self::Void),
+            (
+                (just(Token::KwLet), just(Token::KwMut))
+                    .ignored()
+                    .optional(),
+                ast::Pattern::parse,
+                just(Token::Colon).ignore_then(ast::Type::parse).optional(),
+                just(Token::Eq).ignore_then(ast::Expr::parse),
+            )
+                .map(|(mutable, pattern, ty, value)| {
+                    Self::Let(ast::LetExpr {
+                        mutable: mutable.is_some(),
+                        pattern,
+                        ty,
+                        value: Box::new(value),
+                    })
+                }),
+            just(Token::KwTrue).to(Self::Primitive(ast::PrimitiveExpr::Bool(true))),
+            just(Token::KwFalse).to(Self::Primitive(ast::PrimitiveExpr::Bool(false))),
+            ident.map(Self::Opaque),
+        ))
+        .parse_with(input)
     }
 }
 
@@ -217,6 +240,15 @@ impl Parse for ast::Pattern {
     #[parser(extras = Extra)]
     fn parse(input: TokenStream) -> Self {
         choice((
+            just(Token::KwRef)
+                .ignore_then(Self::parse.map(Box::new))
+                .map(Self::Ref),
+            just(Token::KwMut)
+                .ignore_then(Self::parse.map(Box::new))
+                .map(Self::Mut),
+            (just(Token::KwRef), just(Token::KwMut))
+                .ignore_then(Self::parse.map(Box::new))
+                .map(Self::RefMut),
             ident
                 .then_ignore(just(Token::At))
                 .then(Self::parse)
@@ -242,6 +274,46 @@ impl Parse for ast::Type {
                 kind: K::Primitive(P::Void),
                 arguments: None,
             }),
+            just(Token::Amp)
+                .ignore_then((
+                    just(Token::Tick).ignore_then(ident).optional(),
+                    just(Token::KwMut).optional(),
+                    Self::parse,
+                ))
+                .map(|(lifetime, mutable, ty)| T {
+                    kind: K::Reference(Box::new(TypeReference {
+                        lifetime,
+                        mutable: mutable.is_some(),
+                        ty,
+                    })),
+                    arguments: None,
+                }),
+            ident
+                .try_map(|pr, extra| {
+                    Ok(match pr.as_str() {
+                        "str" => P::Str,
+                        "bool" => P::Bool,
+                        "char" => P::Char,
+                        int if int.starts_with("i") || int.starts_with("u") => P::Number(N::Int {
+                            signed: int.starts_with("i"),
+                            bits: int[1..].parse().map_err(|error| ParserError::NumberError {
+                                error,
+                                at: extra.span(),
+                            })?,
+                        }),
+                        _ => {
+                            return Err(ParserError::Expected {
+                                expectation: vec![Expectation::Type],
+                                found: Token::Identifier(pr),
+                                at: extra.span(),
+                            })
+                        }
+                    })
+                })
+                .map(|prim| T {
+                    kind: K::Primitive(prim),
+                    arguments: None,
+                }),
         ))
         .parse_with(input)
     }

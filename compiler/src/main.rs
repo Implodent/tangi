@@ -15,10 +15,14 @@ fn main() -> Result<()> {
     }))?;
 
     let input = std::fs::read_to_string("small.tn").into_diagnostic()?;
-    let ast =
+    let (ast, errors) =
         tangic_parser::parse(input.clone(), NamedSource::new("small.tn", input))?;
 
-    println!("{ast:#?}");
+    if errors.errors.is_empty() {
+        println!("{ast:#?}");
+    } else {
+        eprintln!("{errors:?}");
+    }
 
     Ok(())
 }

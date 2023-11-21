@@ -29,9 +29,18 @@ pub enum Token {
     #[display(fmt = "a dot .")]
     #[token(".")]
     Dot,
+    #[display(fmt = "a single quote '")]
+    #[token("'")]
+    Tick,
     #[display(fmt = "a comma ,")]
     #[token(",")]
     Comma,
+    #[display(fmt = "a colon :")]
+    #[token(":")]
+    Colon,
+    #[display(fmt = "an ampersand &")]
+    #[token("&")]
+    Amp,
     #[display(fmt = "an @ sign")]
     #[token("@")]
     At,
@@ -44,9 +53,24 @@ pub enum Token {
     #[display(fmt = "the `const` keyword")]
     #[token("const")]
     KwConst,
+    #[display(fmt = "the `ref` keyword")]
+    #[token("ref")]
+    KwRef,
     #[display(fmt = "the `pub` keyword")]
     #[token("pub")]
-    KwPub
+    KwPub,
+    #[display(fmt = "the `let` keyword")]
+    #[token("let")]
+    KwLet,
+    #[display(fmt = "the `mut` keyword")]
+    #[token("mut")]
+    KwMut,
+    #[display(fmt = "the `true` keyword")]
+    #[token("true")]
+    KwTrue,
+    #[display(fmt = "the `false` keyword")]
+    #[token("false")]
+    KwFalse
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -67,16 +91,32 @@ pub enum TokenKind {
     Dot,
     #[error("a comma ,")]
     Comma,
+    #[error("a colon :")]
+    Colon,
     #[error("an @ sign")]
     At,
     #[error("an = sign")]
     Eq,
+    #[error("a single quote '")]
+    Tick,
+    #[error("an ampersand &")]
+    Amp,
     #[error("the `const` keyword")]
     KwConst,
+    #[error("the `ref` keyword")]
+    KwRef,
     #[error("the `pub` keyword")]
     KwPub,
+    #[error("the `let` keyword")]
+    KwLet,
     #[error("an exclamation mark")]
-    Excl
+    Excl,
+    #[error("the `mut` keyword")]
+    KwMut,
+    #[error("the `true` keyword")]
+    KwTrue,
+    #[error("the `false` keyword")]
+    KwFalse
 }
 
 impl Token {
@@ -94,7 +134,15 @@ impl Token {
             Self::KwPub => TokenKind::KwPub,
             Self::OpenParen => TokenKind::OpenParen,
             Self::CloseParen => TokenKind::CloseParen,
-            Self::Excl => TokenKind::Excl
+            Self::Excl => TokenKind::Excl,
+            Self::KwLet => TokenKind::KwLet,
+            Self::Colon => TokenKind::Colon,
+            Self::Amp => TokenKind::Amp,
+            Self::Tick => TokenKind::Tick,
+            Self::KwMut => TokenKind::KwMut,
+            Self::KwRef => TokenKind::KwRef,
+            Self::KwTrue => TokenKind::KwTrue,
+            Self::KwFalse => TokenKind::KwFalse
         }
     }
 }
