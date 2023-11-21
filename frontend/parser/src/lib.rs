@@ -24,7 +24,7 @@ pub fn parse<S: SourceCode + std::fmt::Debug>(
         let tokens = TokenStream::new(input.clone())?;
         let mut inp = Input::new(&tokens);
         let mut errors = vec![];
-        let parsed = file.parse_with(&mut inp); // parse, store a result
+        let parsed = ast::File::parse(&mut inp); // parse, store a result
 
         // collect secondary errors
         errors.extend(inp.errors.secondary.drain(..).map(|located| located.err));
@@ -57,7 +57,7 @@ impl Parse for ast::File {
         try {
             let file = Self {
                 attributes: attributes(true)(input)?,
-                items: vec![],
+                items: items(input)?,
             };
 
             end(input)?;
@@ -132,16 +132,26 @@ impl Parse for ast::Attribute {
 impl Parse for ast::Visibility {
     #[parser(extras = Extra)]
     fn parse(input: TokenStream) -> Self {
-        const VIS: &[&str] = &[];
+        match input.peek()? {
+            Token::KwPub => {
+                input.skip()?;
+                Ok(Self::Public)
+            }
+            _ => Ok(Self::Inherited),
+        }
+    }
+}
 
-        ident
-            .filter(|x| VIS.contains(&x.as_str()), |_| Expectation::Visibility)
-            .optional()
-            .map(|opt_vis| match opt_vis.as_deref() {
-                Some("pub") => ast::Visibility::Public,
-                _ => ast::Visibility::Inherited,
-            })
-            .parse_with(input)
+impl Parse for ast::FunctionModifiers {
+    #[parser(extras = Extra)]
+    fn parse(input: TokenStream) -> Self {
+        let mut m = Self::default();
+
+        if just(Token::KwConst).optional().parse_with(input)?.is_some() {
+            m.const_ = true;
+        }
+
+        Ok(m)
     }
 }
 
@@ -150,10 +160,126 @@ impl Parse for ast::Function {
     fn parse(input: TokenStream) -> Self {
         try {
             Self {
-                modifiers: ast::FunctionModifiers::default(),
-                vis: input.parse(&Parse::parse)?,
-                name: ident(input)?
+                attributes: attributes(false)(input)?,
+                vis: ast::Visibility::parse(input)?,
+                modifiers: ast::FunctionModifiers::parse(input)?,
+                args: repeated_until(Token::OpenParen, ast::Type::parse, Token::CloseParen)(input)?,
+                returns: ast::Type::parse
+                    .optional()
+                    .parse_with(input)?
+                    .unwrap_or(ast::Type {
+                        kind: ast::TypeKind::Primitive(ast::TypePrimitive::Void),
+                        arguments: None,
+                    }),
+                name: ident(input)?,
+                cap_args: ast::Pattern::parse.repeated().collect().parse_with(input)?,
+                statements: {
+                    let before = input.offset;
+
+                    match input.next()? {
+                        Token::Eq => vec![ast::Expr::parse(input)?],
+                        Token::OpenCurly => {
+                            let mut stmts = vec![];
+
+                            while !matches!(input.peek()?, Token::CloseCurly) {
+                                stmts.push(ast::Expr::parse(input)?);
+                            }
+
+                            input.skip()?;
+
+                            stmts
+                        }
+                        other_token => {
+                            return Err(ParserError::Expected {
+                                expectation: vec![Expectation::AnyOf(vec![
+                                    TokenKind::Eq,
+                                    TokenKind::OpenCurly,
+                                ])],
+                                found: other_token,
+                                at: input.span_since(before).into(),
+                            });
+                        }
+                    }
+                },
             }
         }
     }
+}
+
+impl Parse for ast::Expr {
+    #[parser(extras = Extra)]
+    fn parse(input: TokenStream) -> Self {
+        choice((just([Token::OpenParen, Token::CloseParen]).to(Self::Void),)).parse_with(input)
+    }
+}
+
+impl Parse for ast::Pattern {
+    #[parser(extras = Extra)]
+    fn parse(input: TokenStream) -> Self {
+        choice((
+            ident
+                .then_ignore(just(Token::At))
+                .then(Self::parse)
+                .map(|(var, pat)| Self::WithVariable(var, Box::new(pat))),
+            just([Token::OpenParen, Token::CloseParen]).to(Self::Void),
+            ident.map(Self::Variable),
+        ))
+        .parse_with(input)
+    }
+}
+
+impl Parse for ast::Type {
+    #[parser(extras = Extra)]
+    fn parse(input: TokenStream) -> Self {
+        use ast::{Type as T, TypeKind as K, TypeNumber as N, TypePrimitive as P};
+
+        choice((
+            just(Token::Excl).to(T {
+                kind: K::Primitive(P::Never),
+                arguments: None,
+            }),
+            just([Token::OpenParen, Token::CloseParen]).to(T {
+                kind: K::Primitive(P::Void),
+                arguments: None,
+            }),
+        ))
+        .parse_with(input)
+    }
+}
+
+impl Parse for ast::Item {
+    #[parser(extras = Extra)]
+    fn parse(input: TokenStream) -> Self {
+        choice((ast::Function::parse.map(ast::Item::Fn),)).parse_with(input)
+    }
+}
+
+fn repeated_until<O>(
+    bef: Token,
+    parser: impl Parser<TokenStream, O, Extra>,
+    until: Token,
+) -> pfn_type!(TokenStream, Vec<O>, Extra) {
+    move |input| try {
+        just(bef.clone())(input)?;
+        let mut real = vec![];
+
+        while !matches!(input.peek()?, unt if unt == until) {
+            real.push(parser.parse_with(input)?);
+        }
+
+        input.skip()?; // hit the until token
+
+        real
+    }
+}
+
+#[parser(extras = Extra)]
+fn items(input: TokenStream) -> Vec<ast::Item> {
+    let mut items = vec![];
+
+    while input.peek().is_ok() {
+        items.push(ast::Item::parse(input)?);
+    }
+
+    Ok(items)
 }

@@ -41,7 +41,14 @@ pub struct Constant {
 
 #[derive(Debug, Clone)]
 pub enum Expr {
-    
+    Void,
+}
+
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    Void,
+    Variable(Ident),
+    WithVariable(Ident, Box<Pattern>)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,9 +72,14 @@ pub struct FunctionModifiers {
 
 #[derive(Debug, Clone)]
 pub struct Function {
+    pub attributes: Vec<Attribute>,
     pub vis: Visibility,
     pub modifiers: FunctionModifiers,
+    pub args: Vec<Type>,
+    pub returns: Type,
     pub name: Ident,
+    pub cap_args: Vec<Pattern>,
+    pub statements: Vec<Expr>
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +127,8 @@ pub enum TypeKind {
 
 #[derive(Debug, Clone)]
 pub enum TypePrimitive {
+    Void,
+    Never,
     Number(TypeNumber),
     Bool,
     Char,

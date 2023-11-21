@@ -32,8 +32,6 @@ impl Iterator for A {
 
 trait Monad {
   type Item
-
-  (Self.Item)Self pure
 }
 
 (type A, type B)bool TypeEq = A == B
@@ -48,6 +46,8 @@ trait Functor where TypeEq(Self, Self.This[Self.Item]) {
 
 trait Applicative: Functor[Item = Self.Item] {
   type Item
+
+  (Self.Item)Self pure
 }
 
 trait Semigroup: Functor[Item = Self.Item] {

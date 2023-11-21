@@ -20,6 +20,12 @@ pub enum Token {
     #[display(fmt = "a closing curly brace }}")]
     #[token("}")]
     CloseCurly,
+    #[display(fmt = "opening parentheses `(`")]
+    #[token("(")]
+    OpenParen,
+    #[display(fmt = "closing parentheses `)`")]
+    #[token(")")]
+    CloseParen,
     #[display(fmt = "a dot .")]
     #[token(".")]
     Dot,
@@ -29,6 +35,18 @@ pub enum Token {
     #[display(fmt = "an @ sign")]
     #[token("@")]
     At,
+    #[display(fmt = "an = sign")]
+    #[token("=")]
+    Eq,
+    #[display(fmt = "an exclamation mark")]
+    #[token("!")]
+    Excl,
+    #[display(fmt = "the `const` keyword")]
+    #[token("const")]
+    KwConst,
+    #[display(fmt = "the `pub` keyword")]
+    #[token("pub")]
+    KwPub
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -41,12 +59,24 @@ pub enum TokenKind {
     OpenCurly,
     #[error("a closing curly brace }}")]
     CloseCurly,
+    #[error("opening parentheses `(`")]
+    OpenParen,
+    #[error("closing parentheses `)`")]
+    CloseParen,
     #[error("a dot .")]
     Dot,
     #[error("a comma ,")]
     Comma,
     #[error("an @ sign")]
     At,
+    #[error("an = sign")]
+    Eq,
+    #[error("the `const` keyword")]
+    KwConst,
+    #[error("the `pub` keyword")]
+    KwPub,
+    #[error("an exclamation mark")]
+    Excl
 }
 
 impl Token {
@@ -57,8 +87,14 @@ impl Token {
             Self::OpenCurly => TokenKind::OpenCurly,
             Self::CloseCurly => TokenKind::CloseCurly,
             Self::Dot => TokenKind::Dot,
+            Self::Eq => TokenKind::Eq,
             Self::Identifier(_) => TokenKind::Identifier,
-            Self::StringLiteral(_) => TokenKind::StringLiteral
+            Self::StringLiteral(_) => TokenKind::StringLiteral,
+            Self::KwConst => TokenKind::KwConst,
+            Self::KwPub => TokenKind::KwPub,
+            Self::OpenParen => TokenKind::OpenParen,
+            Self::CloseParen => TokenKind::CloseParen,
+            Self::Excl => TokenKind::Excl
         }
     }
 }

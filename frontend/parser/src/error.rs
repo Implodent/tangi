@@ -65,7 +65,7 @@ impl aott::error::Error<TokenStream> for ParserError {
         expected: Option<Vec<<TokenStream as aott::prelude::InputType>::Token>>,
     ) -> Self {
         Self::UnexpectedEof {
-            at: (span.start, span.end).into(),
+            at: (span.start..span.end).into(),
             expected: expected
                 .into_iter()
                 .flatten()
