@@ -28,7 +28,7 @@ pub enum Item {
 pub struct TypeAlias {
     pub vis: Visibility,
     pub name: Ident,
-    pub arguments: Option<Vec<Type>>,
+    pub arguments: Vec<Type>,
     pub actual: Type,
 }
 
@@ -61,7 +61,7 @@ pub struct LetExpr {
     pub mutable: bool,
     pub pattern: Pattern,
     pub ty: Option<Type>,
-    pub value: Box<Expr>,
+    pub value: Option<Box<Expr>>,
 }
 
 #[derive(Debug, Clone)]
@@ -130,7 +130,21 @@ pub enum EnumFields {
 #[derive(Debug, Clone)]
 pub struct Structure {
     pub name: Ident,
+    pub params: Vec<TypePlaceholder>,
     pub fields: Vec<StructField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypePlaceholder {
+    pub kind: PlaceholderKind,
+    pub name: Ident
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum PlaceholderKind {
+    #[default]
+    Type,
+    Lifetime,
 }
 
 #[derive(Debug, Clone)]
@@ -142,7 +156,7 @@ pub struct StructField {
 #[derive(Debug, Clone)]
 pub struct Type {
     pub kind: TypeKind,
-    pub arguments: Option<Vec<Type>>,
+    pub arguments: Vec<Type>,
 }
 
 #[derive(Debug, Clone)]

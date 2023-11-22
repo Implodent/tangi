@@ -1,0 +1,6 @@
+[package]
+name = "tangic_middle"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

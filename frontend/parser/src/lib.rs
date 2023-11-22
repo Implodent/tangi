@@ -2,6 +2,7 @@
 
 use adapters::*;
 use aott::{pfn_type, prelude::*};
+use tracing::*;
 
 mod adapters;
 pub mod error;
@@ -72,7 +73,6 @@ impl Parse for ast::File {
 fn ident(input: TokenStream) -> ast::Ident {
     let before = input.offset;
 
-    // me when diagnostics
     match input.next_or_none() {
         Some(Token::Identifier(ident)) => Ok(ident),
         Some(other_token) => Err(ParserError::Expected {
@@ -158,19 +158,28 @@ impl Parse for ast::FunctionModifiers {
 
 impl Parse for ast::Function {
     #[parser(extras = Extra)]
+    #[instrument(ret, err, skip(input), name = "Function::parse", level = "TRACE")]
     fn parse(input: TokenStream) -> Self {
         try {
             Self {
                 attributes: attributes(false)(input)?,
                 vis: ast::Visibility::parse(input)?,
                 modifiers: ast::FunctionModifiers::parse(input)?,
-                args: repeated_until(Token::OpenParen, ast::Type::parse, Token::CloseParen)(input)?,
+                args: just(Token::OpenParen)
+                    .ignore_then(
+                        ast::Type::parse
+                            .separated_by(just(Token::Comma))
+                            .allow_trailing()
+                            .until(just(Token::CloseParen))
+                            .collect(),
+                    )
+                    .parse_with(input)?,
                 returns: ast::Type::parse
                     .optional()
                     .parse_with(input)?
                     .unwrap_or(ast::Type {
                         kind: ast::TypeKind::Primitive(ast::TypePrimitive::Void),
-                        arguments: None,
+                        arguments: vec![],
                     }),
                 name: ident(input)?,
                 cap_args: ast::Pattern::parse.repeated().collect().parse_with(input)?,
@@ -209,23 +218,27 @@ impl Parse for ast::Function {
 
 impl Parse for ast::Expr {
     #[parser(extras = Extra)]
+    #[instrument(ret, err, skip(input), name = "Expr::parse", level = "TRACE")]
     fn parse(input: TokenStream) -> Self {
         choice((
             just([Token::OpenParen, Token::CloseParen]).to(Self::Void),
             (
-                (just(Token::KwLet), just(Token::KwMut))
-                    .ignored()
-                    .optional(),
+                choice((
+                    just(Token::KwLet).to(false),
+                    just(Token::KwLet)
+                        .optional()
+                        .ignore_then(just(Token::KwMut).to(true)),
+                )).optional(),
+                ast::Type::parse.optional(),
                 ast::Pattern::parse,
-                just(Token::Colon).ignore_then(ast::Type::parse).optional(),
-                just(Token::Eq).ignore_then(ast::Expr::parse),
+                just(Token::Eq).ignore_then(ast::Expr::parse).optional(),
             )
-                .map(|(mutable, pattern, ty, value)| {
+                .map(|(mutable, ty, pattern, value)| {
                     Self::Let(ast::LetExpr {
-                        mutable: mutable.is_some(),
+                        mutable: mutable.unwrap_or(false),
                         pattern,
                         ty,
-                        value: Box::new(value),
+                        value: value.map(Box::new),
                     })
                 }),
             just(Token::KwTrue).to(Self::Primitive(ast::PrimitiveExpr::Bool(true))),
@@ -238,6 +251,7 @@ impl Parse for ast::Expr {
 
 impl Parse for ast::Pattern {
     #[parser(extras = Extra)]
+    #[instrument(ret, err, skip(input), name = "Pattern::parse", level = "TRACE")]
     fn parse(input: TokenStream) -> Self {
         choice((
             just(Token::KwRef)
@@ -249,11 +263,11 @@ impl Parse for ast::Pattern {
             (just(Token::KwRef), just(Token::KwMut))
                 .ignore_then(Self::parse.map(Box::new))
                 .map(Self::RefMut),
+            just([Token::OpenParen, Token::CloseParen]).to(Self::Void),
             ident
                 .then_ignore(just(Token::At))
                 .then(Self::parse)
                 .map(|(var, pat)| Self::WithVariable(var, Box::new(pat))),
-            just([Token::OpenParen, Token::CloseParen]).to(Self::Void),
             ident.map(Self::Variable),
         ))
         .parse_with(input)
@@ -262,31 +276,25 @@ impl Parse for ast::Pattern {
 
 impl Parse for ast::Type {
     #[parser(extras = Extra)]
+    #[instrument(ret, err, skip(input), name = "Type::parse", level = "TRACE")]
     fn parse(input: TokenStream) -> Self {
-        use ast::{Type as T, TypeKind as K, TypeNumber as N, TypePrimitive as P};
+        use ast::{TypeKind as K, TypeNumber as N, TypePrimitive as P};
 
-        choice((
-            just(Token::Excl).to(T {
-                kind: K::Primitive(P::Never),
-                arguments: None,
-            }),
-            just([Token::OpenParen, Token::CloseParen]).to(T {
-                kind: K::Primitive(P::Void),
-                arguments: None,
-            }),
+        let kind = choice((
+            just(Token::Excl).to(K::Primitive(P::Never)),
+            just([Token::OpenParen, Token::CloseParen]).to(K::Primitive(P::Void)),
             just(Token::Amp)
                 .ignore_then((
                     just(Token::Tick).ignore_then(ident).optional(),
                     just(Token::KwMut).optional(),
                     Self::parse,
                 ))
-                .map(|(lifetime, mutable, ty)| T {
-                    kind: K::Reference(Box::new(TypeReference {
+                .map(|(lifetime, mutable, ty)| {
+                    K::Reference(Box::new(TypeReference {
                         lifetime,
                         mutable: mutable.is_some(),
                         ty,
-                    })),
-                    arguments: None,
+                    }))
                 }),
             ident
                 .try_map(|pr, extra| {
@@ -310,12 +318,26 @@ impl Parse for ast::Type {
                         }
                     })
                 })
-                .map(|prim| T {
-                    kind: K::Primitive(prim),
-                    arguments: None,
-                }),
+                .map(|prim| K::Primitive(prim)),
         ))
-        .parse_with(input)
+        .parse_with(input)?;
+
+        Ok(Self {
+            arguments: if let K::Primitive(_) = kind {
+                vec![]
+            } else {
+                just(Token::OpenParen)
+                    .ignore_then(
+                        ast::Type::parse
+                            .separated_by(just(Token::Comma))
+                            .allow_trailing()
+                            .until(just(Token::CloseParen))
+                            .collect(),
+                    )
+                    .parse_with(input)?
+            },
+            kind,
+        })
     }
 }
 
@@ -323,25 +345,6 @@ impl Parse for ast::Item {
     #[parser(extras = Extra)]
     fn parse(input: TokenStream) -> Self {
         choice((ast::Function::parse.map(ast::Item::Fn),)).parse_with(input)
-    }
-}
-
-fn repeated_until<O>(
-    bef: Token,
-    parser: impl Parser<TokenStream, O, Extra>,
-    until: Token,
-) -> pfn_type!(TokenStream, Vec<O>, Extra) {
-    move |input| try {
-        just(bef.clone())(input)?;
-        let mut real = vec![];
-
-        while !matches!(input.peek()?, unt if unt == until) {
-            real.push(parser.parse_with(input)?);
-        }
-
-        input.skip()?; // hit the until token
-
-        real
     }
 }
 

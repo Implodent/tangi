@@ -1,8 +1,9 @@
 use super::*;
-use std::ops::Range;
+use std::{ops::Range, fmt::Debug};
 use tangic_lexer::*;
 use aott::input::SpannedInput;
 
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Extra;
 
 impl ParserExtras<TokenStream> for Extra {
@@ -13,6 +14,12 @@ impl ParserExtras<TokenStream> for Extra {
 pub struct TokenStream {
     pub input: String,
     what: SpannedInput<Token, Range<usize>, Stream<Help>>,
+}
+
+impl Debug for TokenStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "TokenStream {{ input: <redacted> }}")
+    }
 }
 
 impl TokenStream {

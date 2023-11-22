@@ -8,3 +8,4 @@ logos = "0.13.0"
 thiserror.workspace = true
 miette.workspace = true
 derive_more.workspace = true
+paste = "1.0.14"

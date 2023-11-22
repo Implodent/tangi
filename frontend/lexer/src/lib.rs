@@ -70,7 +70,19 @@ pub enum Token {
     KwTrue,
     #[display(fmt = "the `false` keyword")]
     #[token("false")]
-    KwFalse
+    KwFalse,
+    #[display(fmt = "the `struct` keyword")]
+    #[token("struct")]
+    KwStruct,
+    #[display(fmt = "the `enum` keyword")]
+    #[token("enum")]
+    KwEnum,
+    #[display(fmt = "the `trait` keyword")]
+    #[token("trait")]
+    KwTrait,
+    #[display(fmt = "the `impl` keyword")]
+    #[token("impl")]
+    KwImpl
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -116,7 +128,15 @@ pub enum TokenKind {
     #[error("the `true` keyword")]
     KwTrue,
     #[error("the `false` keyword")]
-    KwFalse
+    KwFalse,
+    #[error("the `struct` keyword")]
+    KwStruct,
+    #[error("the `enum` keyword")]
+    KwEnum,
+    #[error("the `trait` keyword")]
+    KwTrait,
+    #[error("the `impl` keyword")]
+    KwImpl
 }
 
 impl Token {
@@ -142,7 +162,11 @@ impl Token {
             Self::KwMut => TokenKind::KwMut,
             Self::KwRef => TokenKind::KwRef,
             Self::KwTrue => TokenKind::KwTrue,
-            Self::KwFalse => TokenKind::KwFalse
+            Self::KwFalse => TokenKind::KwFalse,
+            Self::KwStruct => TokenKind::KwStruct,
+            Self::KwEnum => TokenKind::KwEnum,
+            Self::KwTrait => TokenKind::KwTrait,
+            Self::KwImpl => TokenKind::KwImpl,
         }
     }
 }

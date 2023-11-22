@@ -1,5 +1,6 @@
-(() ())! yeetus () bru @ () {
-  let mut val: &'a mut u255 = true
+((), ())! yeetus () bru @ () {
+  bool val = true
 
   val
 }
+

@@ -1,7 +1,7 @@
 [workspace]
 members = [
   "middle/ast",
-  "middle/hir",
+  "middle",
   "compiler",
   "frontend/lexer",
   "frontend/parser",
@@ -16,10 +16,11 @@ edition = "2021"
 
 [workspace.dependencies]
 tangic_ast.path = "middle/ast"
-tangic_hir.path = "middle/hir"
+tangic_middle.path = "middle"
 tangic_lexer.path = "frontend/lexer"
 tangic_parser.path = "frontend/parser"
 miette = { version = "5.10", features = [ "fancy" ] }
 bitflags = "2"
 thiserror = "1.0"
 derive_more = "0.99"
+tracing = "0.1"

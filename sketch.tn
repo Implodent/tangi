@@ -1,5 +1,5 @@
 struct A {
-  pub f1: i32
+  pub i32 f1
 }
 
 impl A {

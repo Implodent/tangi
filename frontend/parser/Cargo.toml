@@ -9,3 +9,4 @@ tangic_lexer.workspace = true
 tangic_ast.workspace = true
 thiserror.workspace = true
 miette.workspace = true
+tracing.workspace = true
