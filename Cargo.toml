@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "middle/explod",
   "middle/ast",
   "middle",
   "compiler",

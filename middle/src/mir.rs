@@ -1,4 +1,5 @@
 use crate::index::IndexVec;
+use crate::ty::Type;
 
 crate::define_index_type! {
     pub struct BasicBlockId = u32;
@@ -16,11 +17,13 @@ crate::define_index_type! {
     pub struct VariantIdx = u32;
 }
 
+#[derive(Debug, Clone)]
 pub struct Place {
     pub local: Local,
     pub projection: Vec<PlaceItem>
 }
 
+#[derive(Debug, Clone)]
 pub enum ProjectionElem<V, T> {
     Deref,
     Field(FieldIdx, T),
@@ -40,7 +43,6 @@ pub enum ProjectionElem<V, T> {
     Subtype(T),
 }
 
-pub struct Type;
 pub type PlaceItem = ProjectionElem<Local, Type>;
 
 pub struct BasicBlocks {
@@ -65,7 +67,21 @@ pub struct BasicBlock {
 }
 
 #[derive(Debug, Clone)]
-pub enum Statement {}
+pub enum Operand {
+    Copy(Place),
+    Move(Place),
+    Const(Const)
+}
+
+#[derive(Debug, Clone)]
+pub enum Rvalue {
+    Use(Operand),
+}
+
+#[derive(Debug, Clone)]
+pub enum Statement {
+    Assign(Place, Rvalue)
+}
 
 #[derive(Debug, Clone)]
 pub enum Terminator {

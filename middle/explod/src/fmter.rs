@@ -1,0 +1,1136 @@
+use std::fmt::{self, Write};
+
+use owo_colors::{OwoColorize, Style};
+use unicode_width::UnicodeWidthChar;
+
+use crate::Diagnostic;
+use crate::Span;
+use crate::fmter_util::*;
+use crate::Level;
+
+#[derive(Debug, Clone)]
+pub struct GraphicalReportHandler {
+    pub(crate) theme: GraphicalTheme,
+    pub(crate) word_separator: Option<textwrap::WordSeparator>,
+    pub(crate) word_splitter: Option<textwrap::WordSplitter>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkStyle {
+    None,
+    Link,
+    Text,
+}
+
+impl GraphicalReportHandler {
+    pub fn new() -> Self {
+        Self {
+            theme: GraphicalTheme::default(),
+            word_separator: None,
+            word_splitter: None,
+        }
+    }
+}
+
+impl Default for GraphicalReportHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GraphicalReportHandler {
+    /// Render a [`Diagnostic`]. This function is mostly internal and meant to
+    /// be called by the toplevel [`ReportHandler`] handler, but is made public
+    /// to make it easier (possible) to test in isolation from global state.
+    pub fn render_report(
+        &self,
+        f: &mut impl fmt::Write,
+        diagnostic: Diagnostic,
+    ) -> fmt::Result {
+        self.render_header(f, diagnostic)?;
+        self.render_causes(f, diagnostic)?;
+        let src = diagnostic.source_code();
+        self.render_snippets(f, diagnostic, src)?;
+        self.render_footer(f, diagnostic)?;
+        self.render_related(f, diagnostic, src)?;
+        if let Some(footer) = &self.footer {
+            writeln!(f)?;
+            let width = self.termwidth.saturating_sub(4);
+            let mut opts = textwrap::Options::new(width)
+                .initial_indent("  ")
+                .subsequent_indent("  ")
+                .break_words(self.break_words);
+            if let Some(word_separator) = self.word_separator {
+                opts = opts.word_separator(word_separator);
+            }
+            if let Some(word_splitter) = self.word_splitter.clone() {
+                opts = opts.word_splitter(word_splitter);
+            }
+
+            writeln!(f, "{}", textwrap::fill(footer, opts))?;
+        }
+        Ok(())
+    }
+
+    fn render_header(&self, f: &mut impl fmt::Write, diagnostic: Diagnostic) -> fmt::Result {
+        let severity_style = match diagnostic.severity() {
+            Some(Level::Error) | None => self.theme.styles.error,
+            Some(Level::Warning) => self.theme.styles.warning,
+            Some(Level::Advice) => self.theme.styles.advice,
+        };
+        let mut header = String::new();
+        if self.links == LinkStyle::Link && diagnostic.url().is_some() {
+            let url = diagnostic.url().unwrap(); // safe
+            let code = if let Some(code) = diagnostic.code() {
+                format!("{} ", code)
+            } else {
+                "".to_string()
+            };
+            let link = format!(
+                "\u{1b}]8;;{}\u{1b}\\{}{}\u{1b}]8;;\u{1b}\\",
+                url,
+                code.style(severity_style),
+                "(link)".style(self.theme.styles.link)
+            );
+            write!(header, "{}", link)?;
+            writeln!(f, "{}", header)?;
+            writeln!(f)?;
+        } else if let Some(code) = diagnostic.code() {
+            write!(header, "{}", code.style(severity_style),)?;
+            if self.links == LinkStyle::Text && diagnostic.url().is_some() {
+                let url = diagnostic.url().unwrap(); // safe
+                write!(header, " ({})", url.style(self.theme.styles.link))?;
+            }
+            writeln!(f, "{}", header)?;
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+
+    fn render_causes(&self, f: &mut impl fmt::Write, diagnostic: Diagnostic) -> fmt::Result {
+        let (severity_style, severity_icon) = match diagnostic.severity() {
+            Some(Level::Error) | None => (self.theme.styles.error, &self.theme.characters.error),
+            Some(Level::Warning) => (self.theme.styles.warning, &self.theme.characters.warning),
+            Some(Level::Advice) => (self.theme.styles.advice, &self.theme.characters.advice),
+        };
+
+        let initial_indent = format!("  {} ", severity_icon.style(severity_style));
+        let rest_indent = format!("  {} ", self.theme.characters.vbar.style(severity_style));
+        let width = self.termwidth.saturating_sub(2);
+        let mut opts = textwrap::Options::new(width)
+            .initial_indent(&initial_indent)
+            .subsequent_indent(&rest_indent)
+            .break_words(self.break_words);
+        if let Some(word_separator) = self.word_separator {
+            opts = opts.word_separator(word_separator);
+        }
+        if let Some(word_splitter) = self.word_splitter.clone() {
+            opts = opts.word_splitter(word_splitter);
+        }
+
+        writeln!(f, "{}", textwrap::fill(&diagnostic.to_string(), opts))?;
+
+        if !self.with_cause_chain {
+            return Ok(());
+        }
+
+        if let Some(mut cause_iter) = diagnostic
+            .diagnostic_source()
+            .map(DiagnosticChain::from_diagnostic)
+            .or_else(|| diagnostic.source().map(DiagnosticChain::from_stderror))
+            .map(|it| it.peekable())
+        {
+            while let Some(error) = cause_iter.next() {
+                let is_last = cause_iter.peek().is_none();
+                let char = if !is_last {
+                    self.theme.characters.lcross
+                } else {
+                    self.theme.characters.lbot
+                };
+                let initial_indent = format!(
+                    "  {}{}{} ",
+                    char, self.theme.characters.hbar, self.theme.characters.rarrow
+                )
+                .style(severity_style)
+                .to_string();
+                let rest_indent = format!(
+                    "  {}   ",
+                    if is_last {
+                        ' '
+                    } else {
+                        self.theme.characters.vbar
+                    }
+                )
+                .style(severity_style)
+                .to_string();
+                let mut opts = textwrap::Options::new(width)
+                    .initial_indent(&initial_indent)
+                    .subsequent_indent(&rest_indent)
+                    .break_words(self.break_words);
+                if let Some(word_separator) = self.word_separator {
+                    opts = opts.word_separator(word_separator);
+                }
+                if let Some(word_splitter) = self.word_splitter.clone() {
+                    opts = opts.word_splitter(word_splitter);
+                }
+
+                match error {
+                    ErrorKind::Diagnostic(diag) => {
+                        let mut inner = String::new();
+
+                        // Don't print footer for inner errors
+                        let mut inner_renderer = self.clone();
+                        inner_renderer.footer = None;
+                        inner_renderer.with_cause_chain = false;
+                        inner_renderer.render_report(&mut inner, diag)?;
+
+                        writeln!(f, "{}", textwrap::fill(&inner, opts))?;
+                    }
+                    ErrorKind::StdError(err) => {
+                        writeln!(f, "{}", textwrap::fill(&err.to_string(), opts))?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn render_footer(&self, f: &mut impl fmt::Write, diagnostic: Diagnostic) -> fmt::Result {
+        if let Some(help) = diagnostic.help() {
+            let width = self.termwidth.saturating_sub(4);
+            let initial_indent = "  help: ".style(self.theme.styles.help).to_string();
+            let mut opts = textwrap::Options::new(width)
+                .initial_indent(&initial_indent)
+                .subsequent_indent("        ")
+                .break_words(self.break_words);
+            if let Some(word_separator) = self.word_separator {
+                opts = opts.word_separator(word_separator);
+            }
+            if let Some(word_splitter) = self.word_splitter.clone() {
+                opts = opts.word_splitter(word_splitter);
+            }
+
+            writeln!(f, "{}", textwrap::fill(&help.to_string(), opts))?;
+        }
+        Ok(())
+    }
+
+    fn render_related(
+        &self,
+        f: &mut impl fmt::Write,
+        diagnostic: Diagnostic,
+        parent_src: Option<&dyn SourceCode>,
+    ) -> fmt::Result {
+        if let Some(related) = diagnostic.related() {
+            writeln!(f)?;
+            for rel in related {
+                match rel.severity() {
+                    Some(Level::Error) | None => write!(f, "Error: ")?,
+                    Some(Level::Warning) => write!(f, "Warning: ")?,
+                    Some(Level::Advice) => write!(f, "Advice: ")?,
+                };
+                self.render_header(f, rel)?;
+                self.render_causes(f, rel)?;
+                let src = rel.source_code().or(parent_src);
+                self.render_snippets(f, rel, src)?;
+                self.render_footer(f, rel)?;
+                self.render_related(f, rel, src)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn render_snippets(
+        &self,
+        f: &mut impl fmt::Write,
+        diagnostic: Diagnostic,
+        opt_source: Option<&dyn SourceCode>,
+    ) -> fmt::Result {
+        if let Some(source) = opt_source {
+            if let Some(labels) = diagnostic.labels() {
+                let mut labels = labels.collect::<Vec<_>>();
+                labels.sort_unstable_by_key(|l| l.inner().offset());
+                if !labels.is_empty() {
+                    let contents = labels
+                        .iter()
+                        .map(|label| {
+                            source.read_span(label.inner(), self.context_lines, self.context_lines)
+                        })
+                        .collect::<Result<Vec<Box<dyn SpanContents<'_>>>, MietteError>>()
+                        .map_err(|_| fmt::Error)?;
+                    let mut contexts = Vec::with_capacity(contents.len());
+                    for (right, right_conts) in labels.iter().cloned().zip(contents.iter()) {
+                        if contexts.is_empty() {
+                            contexts.push((right, right_conts));
+                        } else {
+                            let (left, left_conts) = contexts.last().unwrap().clone();
+                            let left_end = left.offset() + left.len();
+                            let right_end = right.offset() + right.len();
+                            if left_conts.line() + left_conts.line_count() >= right_conts.line() {
+                                // The snippets will overlap, so we create one Big Chunky Boi
+                                let new_span = LabeledSpan::new(
+                                    left.label().map(String::from),
+                                    left.offset(),
+                                    if right_end >= left_end {
+                                        // Right end goes past left end
+                                        right_end - left.offset()
+                                    } else {
+                                        // right is contained inside left
+                                        left.len()
+                                    },
+                                );
+                                if source
+                                    .read_span(
+                                        new_span.inner(),
+                                        self.context_lines,
+                                        self.context_lines,
+                                    )
+                                    .is_ok()
+                                {
+                                    contexts.pop();
+                                    contexts.push((
+                                        // We'll throw this away later
+                                        new_span, left_conts,
+                                    ));
+                                } else {
+                                    contexts.push((right, right_conts));
+                                }
+                            } else {
+                                contexts.push((right, right_conts));
+                            }
+                        }
+                    }
+                    for (ctx, _) in contexts {
+                        self.render_context(f, source, &ctx, &labels[..])?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn render_context(
+        &self,
+        f: &mut impl fmt::Write,
+        source: &dyn SourceCode,
+        context: &LabeledSpan,
+        labels: &[LabeledSpan],
+    ) -> fmt::Result {
+        let (contents, lines) = self.get_lines(source, context.inner())?;
+
+        let primary_label = labels
+            .iter()
+            .find(|label| label.primary())
+            .or_else(|| labels.first());
+
+        // sorting is your friend
+        let labels = labels
+            .iter()
+            .zip(self.theme.styles.highlights.iter().cloned().cycle())
+            .map(|(label, st)| FancySpan::new(label.label().map(String::from), *label.inner(), st))
+            .collect::<Vec<_>>();
+
+        // The max number of gutter-lines that will be active at any given
+        // point. We need this to figure out indentation, so we do one loop
+        // over the lines to see what the damage is gonna be.
+        let mut max_gutter = 0usize;
+        for line in &lines {
+            let mut num_highlights = 0;
+            for hl in &labels {
+                if !line.span_line_only(hl) && line.span_applies_gutter(hl) {
+                    num_highlights += 1;
+                }
+            }
+            max_gutter = std::cmp::max(max_gutter, num_highlights);
+        }
+
+        // Oh and one more thing: We need to figure out how much room our line
+        // numbers need!
+        let linum_width = lines[..]
+            .last()
+            .map(|line| line.line_number)
+            // It's possible for the source to be an empty string.
+            .unwrap_or(0)
+            .to_string()
+            .len();
+
+        // Header
+        write!(
+            f,
+            "{}{}{}",
+            " ".repeat(linum_width + 2),
+            self.theme.characters.ltop,
+            self.theme.characters.hbar,
+        )?;
+
+        // If there is a primary label, then use its span
+        // as the reference point for line/column information.
+        let primary_contents = match primary_label {
+            Some(label) => source
+                .read_span(label.inner(), 0, 0)
+                .map_err(|_| fmt::Error)?,
+            None => contents,
+        };
+
+        if let Some(source_name) = primary_contents.name() {
+            let source_name = source_name.style(self.theme.styles.link);
+            writeln!(
+                f,
+                "[{}:{}:{}]",
+                source_name,
+                primary_contents.line() + 1,
+                primary_contents.column() + 1
+            )?;
+        } else if lines.len() <= 1 {
+            writeln!(f, "{}", self.theme.characters.hbar.to_string().repeat(3))?;
+        } else {
+            writeln!(
+                f,
+                "[{}:{}]",
+                primary_contents.line() + 1,
+                primary_contents.column() + 1
+            )?;
+        }
+
+        // Now it's time for the fun part--actually rendering everything!
+        for line in &lines {
+            // Line number, appropriately padded.
+            self.write_linum(f, linum_width, line.line_number)?;
+
+            // Then, we need to print the gutter, along with any fly-bys We
+            // have separate gutters depending on whether we're on the actual
+            // line, or on one of the "highlight lines" below it.
+            self.render_line_gutter(f, max_gutter, line, &labels)?;
+
+            // And _now_ we can print out the line text itself!
+            self.render_line_text(f, &line.text)?;
+
+            // Next, we write all the highlights that apply to this particular line.
+            let (single_line, multi_line): (Vec<_>, Vec<_>) = labels
+                .iter()
+                .filter(|hl| line.span_applies(hl))
+                .partition(|hl| line.span_line_only(hl));
+            if !single_line.is_empty() {
+                // no line number!
+                self.write_no_linum(f, linum_width)?;
+                // gutter _again_
+                self.render_highlight_gutter(
+                    f,
+                    max_gutter,
+                    line,
+                    &labels,
+                    LabelRenderMode::SingleLine,
+                )?;
+                self.render_single_line_highlights(
+                    f,
+                    line,
+                    linum_width,
+                    max_gutter,
+                    &single_line,
+                    &labels,
+                )?;
+            }
+            for hl in multi_line {
+                if hl.label().is_some() && line.span_ends(hl) && !line.span_starts(hl) {
+                    self.render_multi_line_end(f, &labels, max_gutter, linum_width, line, hl)?;
+                }
+            }
+        }
+        writeln!(
+            f,
+            "{}{}{}",
+            " ".repeat(linum_width + 2),
+            self.theme.characters.lbot,
+            self.theme.characters.hbar.to_string().repeat(4),
+        )?;
+        Ok(())
+    }
+
+    fn render_multi_line_end(
+        &self,
+        f: &mut impl fmt::Write,
+        labels: &[FancySpan],
+        max_gutter: usize,
+        linum_width: usize,
+        line: &Line,
+        label: &FancySpan,
+    ) -> fmt::Result {
+        // no line number!
+        self.write_no_linum(f, linum_width)?;
+
+        if let Some(label_parts) = label.label_parts() {
+            // if it has a label, how long is it?
+            let (first, rest) = label_parts
+                .split_first()
+                .expect("cannot crash because rest would have been None, see docs on the `label` field of FancySpan");
+
+            if rest.is_empty() {
+                // gutter _again_
+                self.render_highlight_gutter(
+                    f,
+                    max_gutter,
+                    line,
+                    &labels,
+                    LabelRenderMode::SingleLine,
+                )?;
+
+                self.render_multi_line_end_single(
+                    f,
+                    first,
+                    label.style,
+                    LabelRenderMode::SingleLine,
+                )?;
+            } else {
+                // gutter _again_
+                self.render_highlight_gutter(
+                    f,
+                    max_gutter,
+                    line,
+                    &labels,
+                    LabelRenderMode::MultiLineFirst,
+                )?;
+
+                self.render_multi_line_end_single(
+                    f,
+                    first,
+                    label.style,
+                    LabelRenderMode::MultiLineFirst,
+                )?;
+                for label_line in rest {
+                    // no line number!
+                    self.write_no_linum(f, linum_width)?;
+                    // gutter _again_
+                    self.render_highlight_gutter(
+                        f,
+                        max_gutter,
+                        line,
+                        &labels,
+                        LabelRenderMode::MultiLineRest,
+                    )?;
+                    self.render_multi_line_end_single(
+                        f,
+                        label_line,
+                        label.style,
+                        LabelRenderMode::MultiLineRest,
+                    )?;
+                }
+            }
+        } else {
+            // gutter _again_
+            self.render_highlight_gutter(
+                f,
+                max_gutter,
+                line,
+                &labels,
+                LabelRenderMode::SingleLine,
+            )?;
+            // has no label
+            writeln!(f, "{}", self.theme.characters.hbar.style(label.style))?;
+        }
+
+        Ok(())
+    }
+
+    fn render_line_gutter(
+        &self,
+        f: &mut impl fmt::Write,
+        max_gutter: usize,
+        line: &Line,
+        highlights: &[FancySpan],
+    ) -> fmt::Result {
+        if max_gutter == 0 {
+            return Ok(());
+        }
+        let chars = &self.theme.characters;
+        let mut gutter = String::new();
+        let applicable = highlights.iter().filter(|hl| line.span_applies_gutter(hl));
+        let mut arrow = false;
+        for (i, hl) in applicable.enumerate() {
+            if line.span_starts(hl) {
+                gutter.push_str(&chars.ltop.style(hl.style).to_string());
+                gutter.push_str(
+                    &chars
+                        .hbar
+                        .to_string()
+                        .repeat(max_gutter.saturating_sub(i))
+                        .style(hl.style)
+                        .to_string(),
+                );
+                gutter.push_str(&chars.rarrow.style(hl.style).to_string());
+                arrow = true;
+                break;
+            } else if line.span_ends(hl) {
+                if hl.label().is_some() {
+                    gutter.push_str(&chars.lcross.style(hl.style).to_string());
+                } else {
+                    gutter.push_str(&chars.lbot.style(hl.style).to_string());
+                }
+                gutter.push_str(
+                    &chars
+                        .hbar
+                        .to_string()
+                        .repeat(max_gutter.saturating_sub(i))
+                        .style(hl.style)
+                        .to_string(),
+                );
+                gutter.push_str(&chars.rarrow.style(hl.style).to_string());
+                arrow = true;
+                break;
+            } else if line.span_flyby(hl) {
+                gutter.push_str(&chars.vbar.style(hl.style).to_string());
+            } else {
+                gutter.push(' ');
+            }
+        }
+        write!(
+            f,
+            "{}{}",
+            gutter,
+            " ".repeat(
+                if arrow { 1 } else { 3 } + max_gutter.saturating_sub(gutter.chars().count())
+            )
+        )?;
+        Ok(())
+    }
+
+    fn render_highlight_gutter(
+        &self,
+        f: &mut impl fmt::Write,
+        max_gutter: usize,
+        line: &Line,
+        highlights: &[FancySpan],
+        render_mode: LabelRenderMode,
+    ) -> fmt::Result {
+        if max_gutter == 0 {
+            return Ok(());
+        }
+
+        // keeps track of how many colums wide the gutter is
+        // important for ansi since simply measuring the size of the final string
+        // gives the wrong result when the string contains ansi codes.
+        let mut gutter_cols = 0;
+
+        let chars = &self.theme.characters;
+        let mut gutter = String::new();
+        let applicable = highlights.iter().filter(|hl| line.span_applies_gutter(hl));
+        for (i, hl) in applicable.enumerate() {
+            if !line.span_line_only(hl) && line.span_ends(hl) {
+                if render_mode == LabelRenderMode::MultiLineRest {
+                    // this is to make multiline labels work. We want to make the right amount
+                    // of horizontal space for them, but not actually draw the lines
+                    let horizontal_space = max_gutter.saturating_sub(i) + 2;
+                    for _ in 0..horizontal_space {
+                        gutter.push(' ');
+                    }
+                    // account for one more horizontal space, since in multiline mode
+                    // we also add in the vertical line before the label like this:
+                    // 2 │ ╭─▶   text
+                    // 3 │ ├─▶     here
+                    //   · ╰──┤ these two lines
+                    //   ·    │ are the problem
+                    //        ^this
+                    gutter_cols += horizontal_space + 1;
+                } else {
+                    let num_repeat = max_gutter.saturating_sub(i) + 2;
+
+                    gutter.push_str(&chars.lbot.style(hl.style).to_string());
+
+                    gutter.push_str(
+                        &chars
+                            .hbar
+                            .to_string()
+                            .repeat(
+                                num_repeat
+                                    // if we are rendering a multiline label, then leave a bit of space for the
+                                    // rcross character
+                                    - if render_mode == LabelRenderMode::MultiLineFirst {
+                                        1
+                                    } else {
+                                        0
+                                    },
+                            )
+                            .style(hl.style)
+                            .to_string(),
+                    );
+
+                    // we count 1 for the lbot char, and then a few more, the same number
+                    // as we just repeated for. For each repeat we only add 1, even though
+                    // due to ansi escape codes the number of bytes in the string could grow
+                    // a lot each time.
+                    gutter_cols += num_repeat + 1;
+                }
+                break;
+            } else {
+                gutter.push_str(&chars.vbar.style(hl.style).to_string());
+
+                // we may push many bytes for the ansi escape codes style adds,
+                // but we still only add a single character-width to the string in a terminal
+                gutter_cols += 1;
+            }
+        }
+
+        // now calculate how many spaces to add based on how many columns we just created.
+        // it's the max width of the gutter, minus how many character-widths we just generated
+        // capped at 0 (though this should never go below in reality), and then we add 3 to
+        // account for arrowheads when a gutter line ends
+        let num_spaces = (max_gutter + 3).saturating_sub(gutter_cols);
+        // we then write the gutter and as many spaces as we need
+        write!(f, "{}{:width$}", gutter, "", width = num_spaces)?;
+        Ok(())
+    }
+
+    fn write_linum(&self, f: &mut impl fmt::Write, width: usize, linum: usize) -> fmt::Result {
+        write!(
+            f,
+            " {:width$} {} ",
+            linum.style(self.theme.styles.linum),
+            self.theme.characters.vbar,
+            width = width
+        )?;
+        Ok(())
+    }
+
+    fn write_no_linum(&self, f: &mut impl fmt::Write, width: usize) -> fmt::Result {
+        write!(
+            f,
+            " {:width$} {} ",
+            "",
+            self.theme.characters.vbar_break,
+            width = width
+        )?;
+        Ok(())
+    }
+
+    /// Returns an iterator over the visual width of each character in a line.
+    fn line_visual_char_width<'a>(&self, text: &'a str) -> impl Iterator<Item = usize> + 'a {
+        let mut column = 0;
+        let tab_width = self.tab_width;
+        text.chars().map(move |c| {
+            let width = if c == '\t' {
+                // Round up to the next multiple of tab_width
+                tab_width - column % tab_width
+            } else {
+                c.width().unwrap_or(0)
+            };
+            column += width;
+            width
+        })
+    }
+
+    /// Returns the visual column position of a byte offset on a specific line.
+    ///
+    /// If the offset occurs in the middle of a character, the returned column
+    /// corresponds to that character's first column in `start` is true, or its
+    /// last column if `start` is false.
+    fn visual_offset(&self, line: &Line, offset: usize, start: bool) -> usize {
+        let line_range = line.offset..=(line.offset + line.length);
+        assert!(line_range.contains(&offset));
+
+        let mut text_index = offset - line.offset;
+        while text_index <= line.text.len() && !line.text.is_char_boundary(text_index) {
+            if start {
+                text_index -= 1;
+            } else {
+                text_index += 1;
+            }
+        }
+        let text = &line.text[..text_index.min(line.text.len())];
+        let text_width = self.line_visual_char_width(text).sum();
+        if text_index > line.text.len() {
+            // Spans extending past the end of the line are always rendered as
+            // one column past the end of the visible line.
+            //
+            // This doesn't necessarily correspond to a specific byte-offset,
+            // since a span extending past the end of the line could contain:
+            //  - an actual \n character (1 byte)
+            //  - a CRLF (2 bytes)
+            //  - EOF (0 bytes)
+            text_width + 1
+        } else {
+            text_width
+        }
+    }
+
+    /// Renders a line to the output formatter, replacing tabs with spaces.
+    fn render_line_text(&self, f: &mut impl fmt::Write, text: &str) -> fmt::Result {
+        for (c, width) in text.chars().zip(self.line_visual_char_width(text)) {
+            if c == '\t' {
+                for _ in 0..width {
+                    f.write_char(' ')?;
+                }
+            } else {
+                f.write_char(c)?;
+            }
+        }
+        f.write_char('\n')?;
+        Ok(())
+    }
+
+    fn render_single_line_highlights(
+        &self,
+        f: &mut impl fmt::Write,
+        line: &Line,
+        linum_width: usize,
+        max_gutter: usize,
+        single_liners: &[&FancySpan],
+        all_highlights: &[FancySpan],
+    ) -> fmt::Result {
+        let mut underlines = String::new();
+        let mut highest = 0;
+
+        let chars = &self.theme.characters;
+        let vbar_offsets: Vec<_> = single_liners
+            .iter()
+            .map(|hl| {
+                let byte_start = hl.offset();
+                let byte_end = hl.offset() + hl.len();
+                let start = self.visual_offset(line, byte_start, true).max(highest);
+                let end = if hl.len() == 0 {
+                    start + 1
+                } else {
+                    self.visual_offset(line, byte_end, false).max(start + 1)
+                };
+
+                let vbar_offset = (start + end) / 2;
+                let num_left = vbar_offset - start;
+                let num_right = end - vbar_offset - 1;
+                underlines.push_str(
+                    &format!(
+                        "{:width$}{}{}{}",
+                        "",
+                        chars.underline.to_string().repeat(num_left),
+                        if hl.len() == 0 {
+                            chars.uarrow
+                        } else if hl.label().is_some() {
+                            chars.underbar
+                        } else {
+                            chars.underline
+                        },
+                        chars.underline.to_string().repeat(num_right),
+                        width = start.saturating_sub(highest),
+                    )
+                    .style(hl.style)
+                    .to_string(),
+                );
+                highest = std::cmp::max(highest, end);
+
+                (hl, vbar_offset)
+            })
+            .collect();
+        writeln!(f, "{}", underlines)?;
+
+        for hl in single_liners.iter().rev() {
+            if let Some(label) = hl.label_parts() {
+                if label.len() == 1 {
+                    self.write_label_text(
+                        f,
+                        line,
+                        linum_width,
+                        max_gutter,
+                        all_highlights,
+                        chars,
+                        &vbar_offsets,
+                        hl,
+                        &label[0],
+                        LabelRenderMode::SingleLine,
+                    )?;
+                } else {
+                    let mut first = true;
+                    for label_line in &label {
+                        self.write_label_text(
+                            f,
+                            line,
+                            linum_width,
+                            max_gutter,
+                            all_highlights,
+                            chars,
+                            &vbar_offsets,
+                            hl,
+                            label_line,
+                            if first {
+                                LabelRenderMode::MultiLineFirst
+                            } else {
+                                LabelRenderMode::MultiLineRest
+                            },
+                        )?;
+                        first = false;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // I know it's not good practice, but making this a function makes a lot of sense
+    // and making a struct for this does not...
+    #[allow(clippy::too_many_arguments)]
+    fn write_label_text(
+        &self,
+        f: &mut impl fmt::Write,
+        line: &Line,
+        linum_width: usize,
+        max_gutter: usize,
+        all_highlights: &[FancySpan],
+        chars: &ThemeCharacters,
+        vbar_offsets: &[(&&FancySpan, usize)],
+        hl: &&FancySpan,
+        label: &str,
+        render_mode: LabelRenderMode,
+    ) -> fmt::Result {
+        self.write_no_linum(f, linum_width)?;
+        self.render_highlight_gutter(
+            f,
+            max_gutter,
+            line,
+            all_highlights,
+            LabelRenderMode::SingleLine,
+        )?;
+        let mut curr_offset = 1usize;
+        for (offset_hl, vbar_offset) in vbar_offsets {
+            while curr_offset < *vbar_offset + 1 {
+                write!(f, " ")?;
+                curr_offset += 1;
+            }
+            if *offset_hl != hl {
+                write!(f, "{}", chars.vbar.to_string().style(offset_hl.style))?;
+                curr_offset += 1;
+            } else {
+                let lines = match render_mode {
+                    LabelRenderMode::SingleLine => format!(
+                        "{}{} {}",
+                        chars.lbot,
+                        chars.hbar.to_string().repeat(2),
+                        label,
+                    ),
+                    LabelRenderMode::MultiLineFirst => {
+                        format!("{}{}{} {}", chars.lbot, chars.hbar, chars.rcross, label,)
+                    }
+                    LabelRenderMode::MultiLineRest => {
+                        format!("  {} {}", chars.vbar, label,)
+                    }
+                };
+                writeln!(f, "{}", lines.style(hl.style))?;
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn render_multi_line_end_single(
+        &self,
+        f: &mut impl fmt::Write,
+        label: &str,
+        style: Style,
+        render_mode: LabelRenderMode,
+    ) -> fmt::Result {
+        match render_mode {
+            LabelRenderMode::SingleLine => {
+                writeln!(f, "{} {}", self.theme.characters.hbar.style(style), label)?;
+            }
+            LabelRenderMode::MultiLineFirst => {
+                writeln!(f, "{} {}", self.theme.characters.rcross.style(style), label)?;
+            }
+            LabelRenderMode::MultiLineRest => {
+                writeln!(f, "{} {}", self.theme.characters.vbar.style(style), label)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_lines<'a>(
+        &'a self,
+        source: String,
+        context_span: &'a Span,
+    ) -> Result<(Box<dyn SpanContents<'a> + 'a>, Vec<Line>), fmt::Error> {
+        let context_data = source
+            .read_span(context_span, self.context_lines, self.context_lines)
+            .map_err(|_| fmt::Error)?;
+        let context = std::str::from_utf8(context_data.data()).expect("Bad utf8 detected");
+        let mut line = context_data.line();
+        let mut column = context_data.column();
+        let mut offset = context_data.span().offset();
+        let mut line_offset = offset;
+        let mut iter = context.chars().peekable();
+        let mut line_str = String::new();
+        let mut lines = Vec::new();
+        while let Some(char) = iter.next() {
+            offset += char.len_utf8();
+            let mut at_end_of_file = false;
+            match char {
+                '\r' => {
+                    if iter.next_if_eq(&'\n').is_some() {
+                        offset += 1;
+                        line += 1;
+                        column = 0;
+                    } else {
+                        line_str.push(char);
+                        column += 1;
+                    }
+                    at_end_of_file = iter.peek().is_none();
+                }
+                '\n' => {
+                    at_end_of_file = iter.peek().is_none();
+                    line += 1;
+                    column = 0;
+                }
+                _ => {
+                    line_str.push(char);
+                    column += 1;
+                }
+            }
+
+            if iter.peek().is_none() && !at_end_of_file {
+                line += 1;
+            }
+
+            if column == 0 || iter.peek().is_none() {
+                lines.push(Line {
+                    line_number: line,
+                    offset: line_offset,
+                    length: offset - line_offset,
+                    text: line_str.clone(),
+                });
+                line_str.clear();
+                line_offset = offset;
+            }
+        }
+        Ok((context_data, lines))
+    }
+}
+
+/*
+Support types
+*/
+
+#[derive(PartialEq, Debug)]
+enum LabelRenderMode {
+    /// we're rendering a single line label (or not rendering in any special way)
+    SingleLine,
+    /// we're rendering a multiline label
+    MultiLineFirst,
+    /// we're rendering the rest of a multiline label
+    MultiLineRest,
+}
+
+#[derive(Debug)]
+struct Line {
+    line_number: usize,
+    offset: usize,
+    length: usize,
+    text: String,
+}
+
+impl Line {
+    fn span_line_only(&self, span: &FancySpan) -> bool {
+        span.offset() >= self.offset && span.offset() + span.len() <= self.offset + self.length
+    }
+
+    /// Returns whether `span` should be visible on this line, either in the gutter or under the
+    /// text on this line
+    fn span_applies(&self, span: &FancySpan) -> bool {
+        let spanlen = if span.len() == 0 { 1 } else { span.len() };
+        // Span starts in this line
+
+        (span.offset() >= self.offset && span.offset() < self.offset + self.length)
+            // Span passes through this line
+            || (span.offset() < self.offset && span.offset() + spanlen > self.offset + self.length) //todo
+            // Span ends on this line
+            || (span.offset() + spanlen > self.offset && span.offset() + spanlen <= self.offset + self.length)
+    }
+
+    /// Returns whether `span` should be visible on this line in the gutter (so this excludes spans
+    /// that are only visible on this line and do not span multiple lines)
+    fn span_applies_gutter(&self, span: &FancySpan) -> bool {
+        let spanlen = if span.len() == 0 { 1 } else { span.len() };
+        // Span starts in this line
+        self.span_applies(span)
+            && !(
+                // as long as it doesn't start *and* end on this line
+                (span.offset() >= self.offset && span.offset() < self.offset + self.length)
+                    && (span.offset() + spanlen > self.offset
+                        && span.offset() + spanlen <= self.offset + self.length)
+            )
+    }
+
+    // A 'flyby' is a multi-line span that technically covers this line, but
+    // does not begin or end within the line itself. This method is used to
+    // calculate gutters.
+    fn span_flyby(&self, span: &FancySpan) -> bool {
+        // The span itself starts before this line's starting offset (so, in a
+        // prev line).
+        span.offset() < self.offset
+            // ...and it stops after this line's end.
+            && span.offset() + span.len() > self.offset + self.length
+    }
+
+    // Does this line contain the *beginning* of this multiline span?
+    // This assumes self.span_applies() is true already.
+    fn span_starts(&self, span: &FancySpan) -> bool {
+        span.offset() >= self.offset
+    }
+
+    // Does this line contain the *end* of this multiline span?
+    // This assumes self.span_applies() is true already.
+    fn span_ends(&self, span: &FancySpan) -> bool {
+        span.offset() + span.len() >= self.offset
+            && span.offset() + span.len() <= self.offset + self.length
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FancySpan {
+    /// this is deliberately an option of a vec because I wanted to be very explicit
+    /// that there can also be *no* label. If there is a label, it can have multiple
+    /// lines which is what the vec is for.
+    label: Option<Vec<String>>,
+    span: SourceSpan,
+    style: Style,
+}
+
+impl PartialEq for FancySpan {
+    fn eq(&self, other: &Self) -> bool {
+        self.label == other.label && self.span == other.span
+    }
+}
+
+fn split_label(v: String) -> Vec<String> {
+    v.split('\n').map(|i| i.to_string()).collect()
+}
+
+impl FancySpan {
+    fn new(label: Option<String>, span: SourceSpan, style: Style) -> Self {
+        FancySpan {
+            label: label.map(split_label),
+            span,
+            style,
+        }
+    }
+
+    fn style(&self) -> Style {
+        self.style
+    }
+
+    fn label(&self) -> Option<String> {
+        self.label
+            .as_ref()
+            .map(|l| l.join("\n").style(self.style()).to_string())
+    }
+
+    fn label_parts(&self) -> Option<Vec<String>> {
+        self.label.as_ref().map(|l| {
+            l.iter()
+                .map(|i| i.style(self.style()).to_string())
+                .collect()
+        })
+    }
+
+    fn offset(&self) -> usize {
+        self.span.offset()
+    }
+
+    fn len(&self) -> usize {
+        self.span.len()
+    }
+}

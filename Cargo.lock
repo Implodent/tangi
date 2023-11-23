@@ -277,7 +277,7 @@ dependencies = [
  "supports-hyperlinks",
  "supports-unicode",
  "terminal_size",
- "textwrap",
+ "textwrap 0.15.2",
  "thiserror",
  "unicode-width",
 ]
@@ -544,6 +544,15 @@ name = "tangic_codegen_cranelift"
 version = "0.1.0"
 
 [[package]]
+name = "tangic_explod"
+version = "0.1.0"
+dependencies = [
+ "owo-colors",
+ "textwrap 0.16.0",
+ "unicode-width",
+]
+
+[[package]]
 name = "tangic_lexer"
 version = "0.1.0"
 dependencies = [
@@ -585,6 +594,17 @@ name = "textwrap"
 version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7b3e525a49ec206798b40326a44121291b530c963cfb01018f63e135bac543d"
+dependencies = [
+ "smawk",
+ "unicode-linebreak",
+ "unicode-width",
+]
+
+[[package]]
+name = "textwrap"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "222a222a5bfe1bba4a77b45ec488a741b3cb8872e5e499451fd7d0129c9c7c3d"
 dependencies = [
  "smawk",
  "unicode-linebreak",

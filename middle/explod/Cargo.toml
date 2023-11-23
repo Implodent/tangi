@@ -1,0 +1,9 @@
+[package]
+name = "tangic_explod"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+owo-colors = "3.5"
+textwrap = "0.16"
+unicode-width = "0.1"
